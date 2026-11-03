@@ -975,7 +975,10 @@
     if (!parts.length) { banner.hidden = true; banner.replaceChildren(); return; }
     banner.hidden = false;
     const kids = [h('span', {}, parts.join(' '))];
-    if (showSettings) kids.push(h('button', { type: 'button', class: 'link-btn', onclick: openSettings }, '打开「成员与连接」'));
+    if (showSettings) {
+      kids.push(h('button', { type: 'button', class: 'link-btn', onclick: openSetup }, '安装与登录'));
+      kids.push(h('button', { type: 'button', class: 'link-btn', onclick: openSettings }, '打开「成员与连接」'));
+    }
     banner.replaceChildren(...kids);
   }
 
@@ -1977,6 +1980,377 @@
     toast('已导出全部项目的记忆与历史');
   }
 
+  // ------------------------------------------------------------ 安装、登录与联网设置
+  const SETUP_STATUS = { launching: '正在打开终端', running: '流程进行中', completed: '流程结束', failed: '流程失败', cancelled: '已取消' };
+  const PROXY_MODES = { system: '继承启动环境（默认）', direct: '直连（清除代理环境）', custom: '自定义代理' };
+
+  function cleanSetupProxy(mode, value) {
+    const url = value.trim();
+    if (mode !== 'custom') return { mode, url: '' };
+    let parsed;
+    try { parsed = new URL(url); } catch (e) { throw new Error('请输入完整的 HTTP(S) 代理地址，例如 http://127.0.0.1:7890'); }
+    const endpoint = url.match(/^https?:\/\/(?:\[[^\]]+\]|[^@:/?#\\]+):(\d{1,5})\/?$/i);
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || !endpoint
+        || !['', '/'].includes(parsed.pathname) || parsed.search || parsed.hash
+        || /\s/.test(url) || Number(endpoint[1]) < 1 || Number(endpoint[1]) > 65535) {
+      throw new Error('代理必须使用 HTTP 或 HTTPS、明确填写端口，且不能包含用户名、密码、路径或 SOCKS 协议');
+    }
+    return { mode, url };
+  }
+
+  function setupCommand(label, command) {
+    const code = h('textarea', { class: 'setup-command', rows: 2, readonly: true, 'aria-label': label });
+    code.value = command || '当前平台未提供此命令';
+    const copy = h('button', { type: 'button', class: 'btn small', disabled: !command }, '复制命令');
+    copy.addEventListener('click', async () => {
+      try {
+        if (!navigator.clipboard) throw new Error('clipboard unavailable');
+        await navigator.clipboard.writeText(command);
+        toast('命令已复制，请在运行本工具的电脑上执行');
+      } catch (e) { code.focus(); code.select(); toast('已选中命令，请使用系统复制操作'); }
+    });
+    return h('div', { class: 'setup-command-block' }, h('div', { class: 'setup-command-head' }, h('strong', {}, label), copy), code);
+  }
+
+  async function openSetup() {
+    document.body.classList.remove('drawer-open');
+    const body = h('div', { class: 'setup-wizard' }, h('p', {}, '正在读取安装环境……'));
+    let overview = null;
+    let proxyMode = null;
+    let proxyUrl = null;
+    let proxyForm = null;
+    let proxyBusy = false;
+    let verificationBusy = false;
+    let verifyAgain = false;
+    let verificationError = '';
+    let overviewRequest = 0;
+    let proxyEditVersion = 0;
+    const jobs = {};
+    const jobErrors = {};
+    const actionBusy = new Set();
+    const networkBusy = new Set();
+    const networkResults = {};
+    const timers = {};
+    const cards = {};
+    const finished = new Set();
+    const proxyNotice = h('p', { class: 'meta setup-proxy-notice', role: 'status' });
+    const proxyPlatformNote = h('p', { class: 'hint-box setup-network-note', hidden: true });
+    const hostNotice = h('div', { class: 'hint-box setup-host-notice', role: 'status' });
+    const verifyButton = h('button', { type: 'button', class: 'btn small' }, '重新检查安装与登录');
+    let modal;
+
+    function running(job) { return job && ['launching', 'running'].includes(job.status); }
+
+    function acceptJob(member, job) {
+      if (!job) return;
+      const old = jobs[member];
+      if (old && old.id === job.id && old.updated_at > job.updated_at) return;
+      if (old && old.id !== job.id && old.created_at > job.created_at) return;
+      jobs[member] = job;
+    }
+
+    function renderCard(member) {
+      const card = cards[member];
+      if (!card || !overview) return;
+      const info = (overview.members || {})[member] || {};
+      const job = jobs[member];
+      const active = running(job);
+      const busy = actionBusy.has(member) || proxyBusy;
+      const detection = S.members && S.members[member];
+      card.installed.textContent = info.installed ? '已检测到 ' + (info.command || 'CLI') : '尚未检测到 CLI';
+      card.installed.className = 'setup-install-state ' + (info.installed ? 'installed' : 'missing');
+      card.setup.disabled = !overview.can_launch || busy || active;
+      card.login.disabled = !overview.can_launch || !info.installed || busy || active;
+      card.network.disabled = !!S.info.demo || busy || networkBusy.has(member);
+      card.network.textContent = networkBusy.has(member) ? '正在测试网络……' : '保存并测试网络';
+      card.cancel.hidden = !active;
+      card.cancel.disabled = actionBusy.has(member);
+      card.skip.textContent = info.installed ? '已检测到 CLI；一键流程会跳过安装，直接进入登录。' : '一键流程会先安装 CLI，再打开登录。';
+      const jobSignature = JSON.stringify([job && job.status, job && job.message, jobErrors[member]]);
+      if (card.job.dataset.signature !== jobSignature) card.job.replaceChildren(...(job ? [
+        h('strong', { class: 'setup-job-state ' + job.status }, SETUP_STATUS[job.status] || '状态未知'),
+        job.message ? h('p', {}, job.message) : null,
+        active ? h('p', { class: 'meta' }, '请在打开的终端和官方浏览器页面完成操作。关闭此面板不代表取消流程。') : null,
+        active ? h('p', { class: 'meta' }, '取消会请求停止当前流程；已经安装的软件不会回滚或卸载。') : null,
+        job.status === 'completed' ? h('p', { class: 'meta' }, '流程结束不等于登录成功，请查看下方核验结果。') : null,
+        jobErrors[member] ? h('p', { class: 'setup-error' }, jobErrors[member]) : null,
+      ].filter(Boolean) : []));
+      card.job.dataset.signature = jobSignature;
+      card.job.hidden = !job;
+      if (verificationBusy) card.auth.textContent = '正在核验命令与登录状态……';
+      else if (verificationError) card.auth.textContent = '暂时无法核验登录：' + verificationError;
+      else if (S.info.demo || (detection && detection.demo)) card.auth.textContent = '演示模式，不代表真实安装或登录状态。';
+      else if (!detection) card.auth.textContent = '登录状态尚未核验。';
+      else if (!detection.installed) card.auth.textContent = '未检测到命令；安装后请重新检查，必要时重新启动本工具。';
+      else if (member === 'gemini') card.auth.textContent = 'Gemini 登录状态无法自动确认。请在官方 CLI 中核对；需要实际测试时可到“成员与连接”手动测试，会消耗额度。';
+      else if (detection.auth_ok === true) card.auth.textContent = '已核验登录：' + (detection.auth || 'CLI 已确认账号登录');
+      else card.auth.textContent = detection.auth || '登录状态未确认，请完成官方登录后重新检查。';
+      const network = networkResults[member];
+      card.networkResult.replaceChildren(...(network ? [
+        h('strong', { class: network.ok ? 'setup-network-ok' : 'setup-error' }, network.ok ? '网络检查通过' : '网络检查未通过'),
+        h('p', {}, network.message || '未返回检查说明'),
+        h('p', { class: 'meta' }, '目标：' + (network.endpoint || '未知') + ' · 联网方式：' + (PROXY_MODES[network.proxy_mode] || network.proxy_mode || '未知')),
+        network.checked_at ? h('p', { class: 'meta' }, '检查时间：' + quotaReset(network.checked_at)) : null,
+        h('p', { class: 'meta' }, '网络可达不代表已经登录，也不代表账号还有模型额度。'),
+      ].filter(Boolean) : []));
+      card.networkResult.hidden = !network;
+    }
+
+    function renderAll() {
+      MEMBERS.forEach(renderCard);
+      verifyButton.disabled = verificationBusy;
+      verifyButton.textContent = verificationBusy ? '正在核验……' : '重新检查安装与登录';
+      if (proxyMode) {
+        proxyMode.disabled = proxyBusy || actionBusy.size > 0;
+        proxyUrl.disabled = proxyBusy || actionBusy.size > 0;
+        proxyForm.hidden = proxyMode.value !== 'custom';
+      }
+      if (overview) {
+        proxyPlatformNote.hidden = !overview.network_note;
+        proxyPlatformNote.textContent = overview.network_note || '';
+        hostNotice.textContent = overview.can_launch
+          ? '终端将打开在运行本工具的电脑上。请亲自在官方浏览器页面完成账号登录，本网页不收集密码或验证码。'
+          : (overview.reason || '当前环境无法打开本机终端。') + ' 可以复制下方官方命令，在运行本工具的电脑终端中操作。';
+      }
+    }
+
+    async function saveProxy(announce) {
+      if (!proxyMode) throw new Error('设置仍在加载，请稍等');
+      if (proxyBusy) throw new Error('正在保存联网设置，请稍等');
+      const proxy = cleanSetupProxy(proxyMode.value, proxyUrl.value);
+      proxyBusy = true;
+      renderAll();
+      try {
+        const data = await api('POST', '/api/setup/proxy', { proxy });
+        const saved = data.proxy || proxy;
+        proxyMode.value = saved.mode;
+        proxyUrl.value = saved.url || '';
+        proxyNotice.textContent = '已保存：' + (PROXY_MODES[saved.mode] || saved.mode) + '。后续启动的 CLI 与安装流程使用此设置。';
+        if (announce) toast('联网设置已保存');
+        return saved;
+      } finally { proxyBusy = false; renderAll(); }
+    }
+
+    async function verifyMembers() {
+      if (!modal.isConnected) return;
+      if (verificationBusy) { verifyAgain = true; return; }
+      verificationBusy = true;
+      verificationError = '';
+      renderAll();
+      const availabilitySnapshot = availabilityEpochSnapshot();
+      try {
+        const data = await api('GET', '/api/members?refresh=1');
+        if (!modal.isConnected) return;
+        S.members = {};
+        data.members.forEach((member) => {
+          S.members[member.id] = member;
+          if (member.availability) acceptAvailability({ [member.id]: member.availability }, availabilitySnapshot);
+        });
+        renderHeader();
+        renderBanner();
+      } catch (e) { verificationError = e.message; }
+      finally {
+        verificationBusy = false;
+        if (modal.isConnected) {
+          renderAll();
+          if (verifyAgain) { verifyAgain = false; await verifyMembers(); }
+        }
+      }
+    }
+
+    async function refreshOverview() {
+      const request = ++overviewRequest;
+      const data = await api('GET', '/api/setup');
+      if (!modal.isConnected || request !== overviewRequest) return;
+      overview = data;
+      for (const member of MEMBERS) acceptJob(member, ((data.members || {})[member] || {}).active_job);
+      renderAll();
+      for (const member of MEMBERS) {
+        // An active job may have been started in another tab, or just disappeared
+        // from the overview after finishing. Read its authoritative final state.
+        if (running(jobs[member])) pollJob(member, jobs[member].id, 500);
+      }
+    }
+
+    async function finishJob(member, job) {
+      if (finished.has(job.id)) return;
+      finished.add(job.id);
+      if (!modal.isConnected) return;
+      try { await refreshOverview(); } catch (e) { jobErrors[member] = '无法刷新安装状态：' + e.message; renderCard(member); }
+      if (modal.isConnected) await verifyMembers();
+    }
+
+    function pollJob(member, jobId, delay) {
+      clearTimeout(timers[member]);
+      timers[member] = setTimeout(async () => {
+        if (!modal.isConnected || !jobs[member] || jobs[member].id !== jobId) return;
+        try {
+          const data = await api('GET', '/api/setup/jobs/' + encodeURIComponent(jobId));
+          if (!modal.isConnected || !jobs[member] || jobs[member].id !== jobId) return;
+          acceptJob(member, data.job);
+          delete jobErrors[member];
+          renderCard(member);
+          if (running(jobs[member])) pollJob(member, jobId, 1600);
+          else await finishJob(member, jobs[member]);
+        } catch (e) {
+          if (!modal.isConnected) return;
+          jobErrors[member] = '暂时无法获取流程状态：' + e.message + '。正在重试。';
+          renderCard(member);
+          pollJob(member, jobId, 4000);
+        }
+      }, delay || 600);
+    }
+
+    async function start(member, action) {
+      if (!overview || !overview.can_launch || actionBusy.has(member)) return;
+      actionBusy.add(member);
+      delete jobErrors[member];
+      cards[member].error.textContent = '';
+      renderAll();
+      try {
+        await saveProxy(false);
+        if (!modal.isConnected) return;
+        const data = await api('POST', '/api/setup/' + member + '/start', { action });
+        acceptJob(member, data.job);
+        if (!modal.isConnected) return;
+        renderCard(member);
+        if (running(data.job)) pollJob(member, data.job.id);
+        else await finishJob(member, data.job);
+      } catch (e) {
+        if (modal.isConnected) {
+          jobErrors[member] = e.message;
+          cards[member].error.textContent = e.message;
+        }
+      } finally { actionBusy.delete(member); if (modal.isConnected) renderAll(); }
+    }
+
+    async function cancel(member) {
+      const job = jobs[member];
+      if (!running(job) || actionBusy.has(member)) return;
+      actionBusy.add(member);
+      cards[member].error.textContent = '';
+      let submitted = false;
+      renderCard(member);
+      try {
+        await api('POST', '/api/setup/jobs/' + encodeURIComponent(job.id) + '/cancel', {});
+        submitted = true;
+        if (!modal.isConnected) return;
+        jobErrors[member] = '已请求取消，正在确认流程是否停止。';
+        renderCard(member);
+        const data = await api('GET', '/api/setup/jobs/' + encodeURIComponent(job.id));
+        acceptJob(member, data.job);
+        if (!modal.isConnected) return;
+        delete jobErrors[member];
+        clearTimeout(timers[member]);
+        renderCard(member);
+        if (running(data.job)) pollJob(member, job.id);
+        else await finishJob(member, data.job);
+      } catch (e) {
+        if (modal.isConnected) {
+          cards[member].error.textContent = (submitted ? '取消已提交，但暂时无法确认是否停止：' : '') + e.message;
+          if (submitted && running(jobs[member])) pollJob(member, job.id, 1600);
+        }
+      }
+      finally { actionBusy.delete(member); if (modal.isConnected) renderCard(member); }
+    }
+
+    async function testNetwork(member) {
+      if (networkBusy.has(member) || S.info.demo) return;
+      networkBusy.add(member);
+      const editVersion = proxyEditVersion;
+      delete networkResults[member];
+      cards[member].error.textContent = '';
+      renderCard(member);
+      try {
+        await saveProxy(false);
+        if (!modal.isConnected) return;
+        const data = await api('POST', '/api/setup/' + member + '/network', {});
+        if (modal.isConnected && proxyEditVersion === editVersion) networkResults[member] = data;
+      } catch (e) { if (modal.isConnected && proxyEditVersion === editVersion) cards[member].error.textContent = e.message; }
+      finally { networkBusy.delete(member); if (modal.isConnected) renderCard(member); }
+    }
+
+    modal = openModal({ title: '安装与登录', body, wide: true, actions: [
+      { label: '关闭' },
+      { label: '保存联网设置', primary: true, onClick: async () => { await saveProxy(true); return true; } },
+    ] });
+    let settings;
+    try {
+      [overview, settings] = await Promise.all([api('GET', '/api/setup'), api('GET', '/api/settings')]);
+    } catch (e) {
+      if (modal.isConnected) body.replaceChildren(h('p', { class: 'setup-error', role: 'alert' }, '无法读取安装设置：' + e.message),
+        h('button', { type: 'button', class: 'btn', onclick: openSetup }, '重新加载'));
+      return;
+    }
+    if (!modal.isConnected) return;
+    const proxy = settings.proxy || { mode: 'system', url: '' };
+    proxyMode = select([['system', '继承启动环境（默认）'], ['direct', '直连（清除代理环境）'], ['custom', '自定义 HTTP(S) 代理']], proxy.mode || 'system');
+    proxyUrl = textInput(proxy.url || '', '例如 http://127.0.0.1:7890');
+    proxyUrl.maxLength = 512;
+    proxyForm = field('代理地址', proxyUrl, '仅填你已在使用的代理地址。不会自动探测端口；不支持 SOCKS 或带用户名、密码的地址。');
+    proxyForm.hidden = proxyMode.value !== 'custom';
+    const proxyChanged = () => {
+      proxyEditVersion++;
+      MEMBERS.forEach((member) => { delete networkResults[member]; });
+      proxyForm.hidden = proxyMode.value !== 'custom';
+      proxyNotice.textContent = '联网设置尚未保存。开始安装、登录或网络测试时会先保存当前设置。';
+      renderAll();
+    };
+    proxyMode.addEventListener('change', proxyChanged);
+    proxyUrl.addEventListener('input', proxyChanged);
+    const sections = MEMBERS.map((member) => {
+      const info = (overview.members || {})[member] || {};
+      const installed = h('span', { class: 'setup-install-state' });
+      const setupButton = h('button', { type: 'button', class: 'btn primary', onclick: () => start(member, 'setup'), 'aria-label': NAMES[member] + ' 一键安装并登录' }, '一键安装并登录');
+      const loginButton = h('button', { type: 'button', class: 'btn', onclick: () => start(member, 'login'), 'aria-label': NAMES[member] + ' 仅打开登录' }, '仅打开登录');
+      const networkButton = h('button', { type: 'button', class: 'btn small', onclick: () => testNetwork(member), 'aria-label': NAMES[member] + ' 保存并测试网络' }, '保存并测试网络');
+      const cancelButton = h('button', { type: 'button', class: 'btn small danger', hidden: true, onclick: () => cancel(member), 'aria-label': '取消 ' + NAMES[member] + ' 安装登录流程' }, '取消流程');
+      const skip = h('p', { class: 'meta' });
+      const job = h('div', { class: 'setup-job', role: 'status', hidden: true });
+      const auth = h('p', { class: 'setup-auth', role: 'status' });
+      const error = h('p', { class: 'setup-error', role: 'alert' });
+      const networkResult = h('div', { class: 'setup-network-result', role: 'status', hidden: true });
+      const prerequisites = (info.prerequisites || []).map((text) => h('li', {}, String(text)));
+      const official = info.install_url && /^https?:\/\//i.test(info.install_url)
+        ? h('a', { href: info.install_url, target: '_blank', rel: 'noopener noreferrer' }, info.install_url) : null;
+      cards[member] = { installed, setup: setupButton, login: loginButton, network: networkButton,
+        cancel: cancelButton, skip, job, auth, error, networkResult };
+      acceptJob(member, info.active_job);
+      return h('section', { class: 'setup-member m-' + member, 'data-setup-member': member },
+        h('div', { class: 'setup-member-head' }, h('h3', {}, NAMES[member]), installed),
+        h('p', { class: 'setup-disk-note' }, '安装将下载并执行官方安装程序，写入 CLI 文件，并可能更新命令搜索路径。登录信息由官方 CLI 自行保存。'),
+        official ? h('p', { class: 'setup-official' }, '官方安装来源：', official) : null,
+        prerequisites.length ? h('ul', { class: 'setup-prerequisites' }, prerequisites) : null,
+        h('div', { class: 'setup-actions' }, setupButton, loginButton, cancelButton), skip,
+        info.login_note ? h('p', { class: 'meta' }, info.login_note) : null,
+        job, auth, error,
+        h('div', { class: 'setup-network-actions' }, networkButton,
+          S.info.demo ? h('span', { class: 'meta' }, '演示模式不测试真实网络') : null), networkResult,
+        h('details', { class: 'setup-manual' }, h('summary', {}, '在自己的终端中操作'),
+          setupCommand(NAMES[member] + ' 官方安装命令', info.install_command),
+          setupCommand(NAMES[member] + ' 登录命令', info.login_command),
+          h('p', { class: 'meta' }, '取消流程不会卸载已安装的文件。手动运行的终端不会自动继承本工具的联网设置。')));
+    });
+    verifyButton.addEventListener('click', async () => {
+      try { await refreshOverview(); await verifyMembers(); }
+      catch (e) { toast(e.message, true); }
+    });
+    body.replaceChildren(
+      h('p', { class: 'setup-intro' }, '先选联网方式，再为需要的成员打开安装和登录流程。所有操作发生在运行本工具的电脑上。'),
+      hostNotice,
+      h('section', { class: 'setup-proxy' }, h('h3', {}, '联网设置'),
+        field('联网方式', proxyMode), proxyPlatformNote, proxyForm, proxyNotice,
+        h('p', { class: 'meta' }, '只设置本工具启动的后续进程的代理环境，不修改系统网络或 CLI 全局配置。部分 CLI 仍可能读取系统代理或 PAC；浏览器登录页使用浏览器自己的网络设置。会为本地登录回调保留直连设置。')),
+      h('div', { class: 'setup-check-head' }, h('h3', {}, '安装与登录'), verifyButton),
+      ...sections,
+      h('p', { class: 'meta' }, '不会自动发送模型测试消息。手动“测试连通”会消耗账号额度。'),
+      h('button', { type: 'button', class: 'btn', onclick: openSettings }, '打开成员与连接（高级设置）'));
+    renderAll();
+    for (const member of MEMBERS) {
+      if (running(jobs[member])) pollJob(member, jobs[member].id);
+    }
+  }
+
   // ------------------------------------------------------------ 成员与连接
   async function openSettings() {
     document.body.classList.remove('drawer-open');
@@ -2033,6 +2407,9 @@
     renderHeader();
 
     const nodes = [];
+    nodes.push(h('div', { class: 'setup-entry' },
+      h('div', {}, h('strong', {}, '需要安装、登录或配置代理？'), h('p', { class: 'meta' }, '打开引导面板；这里保留命令路径、模型等高级设置。')),
+      h('button', { type: 'button', class: 'btn', onclick: openSetup }, '安装与登录')));
     if (S.info.demo) nodes.push(h('div', { class: 'hint-box' }, '当前是演示模式：不会调用真实命令行。真实使用时，去掉 --demo 重新启动程序。'));
     else nodes.push(h('p', {}, '三家都通过各自的官方命令行调用，用的是你在这台电脑上登录的会员账号。先在终端里装好并登录，再回来点「测试连通」。'));
 
@@ -2154,6 +2531,8 @@
     $('#btn-new-2').addEventListener('click', openNewGroup);
     $('#btn-settings').addEventListener('click', openSettings);
     $('#btn-settings-2').addEventListener('click', openSettings);
+    $('#btn-setup').addEventListener('click', openSetup);
+    $('#btn-setup-2').addEventListener('click', openSetup);
     $('#btn-memory').addEventListener('click', openMemories);
     $('#btn-models').addEventListener('click', openGroupModels);
     $('#btn-memory-side').addEventListener('click', openMemories);

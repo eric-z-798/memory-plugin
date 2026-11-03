@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .common import MEMBER_ORDER, name_of
+from .network import apply_proxy
 
 IS_WINDOWS = os.name == "nt"
 
@@ -36,7 +37,7 @@ CLI_INFO = {
         "install_windows": ["在 PowerShell 里运行：irm https://claude.ai/install.ps1 | iex",
                             "或者：winget install Anthropic.ClaudeCode"],
         "install_unix": ["curl -fsSL https://claude.ai/install.sh | bash"],
-        "login": "在终端运行 claude，按提示用 Claude 会员账号（Pro / Max）登录",
+        "login": "在终端运行 claude auth login，按提示用 Claude 账号完成浏览器授权",
     },
     "gpt": {
         "cli": "Codex CLI",
@@ -285,6 +286,9 @@ def _extra_bin_dirs() -> List[Path]:
             base = os.environ.get(var)
             if base:
                 dirs.append(Path(base) / sub)
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            dirs.extend([Path(local) / "agy" / "bin", Path(local) / "Programs" / "OpenAI" / "Codex" / "bin"])
     return dirs
 
 
@@ -308,6 +312,9 @@ def find_command(member: str, conf: dict) -> Optional[str]:
     if IS_WINDOWS and member == "gemini":
         # 优先用命令行版本的 agy，避免和 Antigravity 桌面应用带的同名启动器混淆
         base = os.environ.get("LOCALAPPDATA")
+        current = Path(base) / "agy" / "bin" / "agy.exe" if base else None
+        if current and current.is_file():
+            return str(current)
         cli = Path(base) / "Antigravity" / "agy.exe" if base else None
         if cli and cli.is_file():
             return str(cli)
@@ -380,7 +387,7 @@ def check_agy_account_settings() -> None:
 
 
 def member_env(member: str, settings: dict) -> Tuple[dict, List[str]]:
-    env = dict(os.environ)
+    env = apply_proxy(dict(os.environ), settings.get("proxy", {"mode": "system", "url": ""}))
     removed: List[str] = []
     if settings.get("membership_only", True):
         for key in API_KEY_VARS.get(member, []):
@@ -769,7 +776,8 @@ class Registry:
 
     def _detect_one(self, member: str, settings: dict, refresh: bool) -> dict:
         conf = settings["members"][member]
-        key = "%s|%s" % (member, conf.get("command", ""))
+        key = "%s|%s|%s|%s" % (member, conf.get("command", ""), settings.get("membership_only", True),
+                                 json.dumps(settings.get("proxy", {}), sort_keys=True))
         with self._cache_lock:
             hit = self._cache.get(key)
         if hit and not refresh and time.time() - hit[0] < 60:

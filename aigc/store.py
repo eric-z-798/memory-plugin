@@ -26,6 +26,7 @@ from . import board as board_mod
 from .common import MEMBER_ORDER, atomic_write_json, name_of, now, read_json, valid_gid
 from .memory import MemoryStore
 from .routing import default_routing, clean_routing, resolve_route
+from .network import DEFAULT_PROXY, clean_proxy
 
 DEFAULT_SETTINGS = {
     "members": {
@@ -39,6 +40,7 @@ DEFAULT_SETTINGS = {
     "summary_batch": 8,
     # 调用时忽略 ANTHROPIC_API_KEY 等环境变量，保证只用会员额度
     "membership_only": True,
+    "proxy": copy.deepcopy(DEFAULT_PROXY),
 }
 for _member in MEMBER_ORDER:
     DEFAULT_SETTINGS["members"][_member]["routing"] = default_routing(_member)
@@ -55,6 +57,7 @@ class Store:
         self.groups_dir.mkdir(parents=True, exist_ok=True)
         self._locks: Dict[str, threading.RLock] = {}
         self._guard = threading.Lock()
+        self._settings_lock = threading.RLock()
         self._messages: Dict[str, List[dict]] = {}
         self.memory = MemoryStore(self.root)
 
@@ -67,7 +70,8 @@ class Store:
 
     # ---------- 全局设置 ----------
     def load_settings(self) -> dict:
-        data = read_json(self.root / "settings.json", {})
+        with self._settings_lock:
+            data = read_json(self.root / "settings.json", {})
         merged = copy.deepcopy(DEFAULT_SETTINGS)
         for key, value in data.items():
             if key == "members" and isinstance(value, dict):
@@ -79,7 +83,13 @@ class Store:
         return merged
 
     def save_settings(self, settings: dict) -> dict:
+        with self._settings_lock:
+            return self._save_settings(settings)
+
+    def _save_settings(self, settings: dict) -> dict:
         clean = self.load_settings()
+        if "proxy" in settings:
+            clean["proxy"] = clean_proxy(settings["proxy"])
         members = settings.get("members", {})
         for mid in MEMBER_ORDER:
             conf = members.get(mid, {})

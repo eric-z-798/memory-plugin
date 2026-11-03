@@ -1,8 +1,12 @@
-# AI 群聊 + 共享记忆（0.3.0）
+# AI 群聊 + 共享记忆（0.4.0）
 
 在原有三家群聊工具中加入可管理、可追溯的长期记忆。不同群聊选择同一项目，即可共用该项目已确认的记忆；个人偏好可以明确设为全局共享。模型仍由已有账号登录的 CLI 调用，记忆保存与检索使用 Python 标准库和本地 SQLite，不需要新增模型 API 或 Embedding API。
 
 **快速体验：** Windows 双击 `start-demo-windows.bat`；Linux/macOS 运行 `./start-linux.sh --demo`。演示模式可真实保存、编辑和检索本地记忆，但 AI 回复是模拟的。
+
+**安装与登录：** 装好 Python 并以正式模式启动本工具后，点侧栏「安装与登录」。选择继承环境、直连或自定义 HTTP/HTTPS 代理，然后在各成员卡片点「一键安装并登录」。工具会打开本机终端，运行官方安装和授权流程；已找到 CLI 时跳过安装。浏览器授权仍由你本人完成，不需要将密码、验证码或令牌填进本工具。
+
+流程结束后刷新检测，分别核对安装与登录状态。Gemini 的 agy 目前没有本版已接入的独立登录状态查询，因此会提示到官方终端确认；它不会仅凭终端退出显示“已登录”。「测试连通」会另外调用模型，可能消耗额度。详细步骤见 [安装登录引导](docs/onboarding.md)。
 
 演示数据默认保存在 `demo-data/`，正式模式默认保存在 `data/`，相互隔离。只有显式使用相同的 `--data-dir` 时才会共用数据。
 
@@ -272,4 +276,4 @@ python3 run.py [--host 地址] [--port 端口] [--password 密码] [--data-dir �
 - 结构：`aigc/store.py`（群聊存储）、`aigc/memory.py`（独立记忆核心）、`aigc/board.py`（看板和共识规则）、`aigc/prompts.py`（提示词）、`aigc/members.py`（调用三家命令行）、`aigc/engine.py`（发言调度）、`aigc/server.py`（网页服务）、`aigc/static/`（界面）。
 - 运行测试：`python3 -m unittest discover -s tests`（命令行调用的测试用 `tests/fake_bin` 里的假命令行，Windows 上会跳过）。
 
-接口说明见 [记忆接口](docs/memory-api.md) 和 [模型、额度与恢复](docs/model-routing.md)，当前交付验证见 [0.3.0 验证记录](docs/verification-0.3.0.md)。
+接口说明见 [记忆接口](docs/memory-api.md)、[模型、额度与恢复](docs/model-routing.md) 和 [安装登录引导](docs/onboarding.md)，当前交付验证见 [0.4.0 验证记录](docs/verification-0.4.0.md)。

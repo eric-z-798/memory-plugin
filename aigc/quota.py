@@ -298,7 +298,8 @@ class QuotaMonitor:
         if member not in self._locks:
             return _result("unsupported", "", "未知成员")
         conf = settings.get("members", {}).get(member, {})
-        key = (str(conf.get("command") or ""), bool(settings.get("membership_only", True)), self.demo)
+        key = (str(conf.get("command") or ""), bool(settings.get("membership_only", True)), self.demo,
+               json.dumps(settings.get("proxy", {}), sort_keys=True))
         with self._locks[member]:
             with self._guard:
                 entry = self._cache.get(member)

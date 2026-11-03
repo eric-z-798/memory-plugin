@@ -30,6 +30,8 @@ from . import board as board_mod
 from .common import MEMBER_ORDER, name_of
 from .store import StoreError
 from .memory import MemoryError, MemoryConflict
+from .network import network_probe
+from .setup import SetupManager
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_BODY = 2 * 1024 * 1024
@@ -41,6 +43,12 @@ CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src '
 
 ROUTES = [
     ("GET", r"/api/info", "info"),
+    ("GET", r"/api/setup", "setup_overview"),
+    ("POST", r"/api/setup/proxy", "setup_proxy"),
+    ("POST", r"/api/setup/(claude|gpt|gemini)/start", "setup_start"),
+    ("POST", r"/api/setup/(claude|gpt|gemini)/network", "setup_network"),
+    ("GET", r"/api/setup/jobs/([a-f0-9]{32})", "setup_job"),
+    ("POST", r"/api/setup/jobs/([a-f0-9]{32})/cancel", "setup_cancel"),
     ("GET", r"/api/members", "members"),
     ("POST", r"/api/members/(claude|gpt|gemini)/ping", "ping"),
     ("POST", r"/api/members/(claude|gpt|gemini)/pause", "pause_member"),
@@ -90,6 +98,7 @@ class App:
         self.password = password or None
         self.local_only = local_only
         self.demo = demo
+        self.setup = SetupManager(store, registry, local_only=local_only, demo=demo)
         self._failures: dict = {}
         self._fail_lock = threading.Lock()
 
@@ -326,6 +335,38 @@ class Handler(BaseHTTPRequestHandler):
             "local_only": self.app.local_only, "platform": sys.platform,
         })
 
+    def _setup_local(self):
+        if not self.app.local_only or self.client_address[0] not in ("127.0.0.1", "::1"):
+            raise HttpError(403, "安装与登录操作需要在运行本工具的电脑上，以 localhost 本机模式打开")
+
+    def api_setup_overview(self, body):
+        self.send_json(200, self.app.setup.overview(self.app.store.load_settings()))
+
+    def api_setup_proxy(self, body):
+        self._setup_local()
+        saved = self.app.store.save_settings({"proxy": body.get("proxy")})
+        self.send_json(200, {"proxy": saved["proxy"]})
+
+    def api_setup_start(self, member, body):
+        self._setup_local()
+        job = self.app.setup.start(member, body.get("action"), self.app.store.load_settings())
+        self.send_json(202, {"job": job})
+
+    def api_setup_job(self, job_id, body):
+        self.send_json(200, {"job": self.app.setup.job(job_id)})
+
+    def api_setup_cancel(self, job_id, body):
+        self._setup_local()
+        self.send_json(200, {"job": self.app.setup.cancel(job_id)})
+
+    def api_setup_network(self, member, body):
+        self._setup_local()
+        if self.app.demo:
+            self.send_json(200, {"ok": None, "checked_at": time.time(), "simulation": True,
+                                 "message": "演示模式不发起网络检测，请在正式模式下测试连接。"})
+            return
+        self.send_json(200, network_probe(member, self.app.store.load_settings()))
+
     def api_members(self, body):
         settings = self.app.store.load_settings()
         found = self.app.registry.detect(settings, refresh=self._query().get("refresh") == "1")
@@ -359,6 +400,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, self.app.store.load_settings())
 
     def api_put_settings(self, body):
+        if "proxy" in body:
+            self._setup_local()
         self.send_json(200, self.app.store.save_settings(body))
 
     def api_list_groups(self, body):
