@@ -1,0 +1,39 @@
+# Local secrets and environment configuration
+.env
+.env.*
+!.env.example
+
+# Runtime memory data
+/data/
+/local-data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Logs and caches
+*.log
+logs/
+.cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Dependencies and build outputs
+node_modules/
+dist/
+build/
+target/
+coverage/
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
