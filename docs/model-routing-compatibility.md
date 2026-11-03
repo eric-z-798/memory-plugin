@@ -66,6 +66,12 @@ Claude 官方交互式 `/usage`、Codex `/status`、Antigravity `/usage`（别�
 
 ## “省额度”的产品承诺边界
 
+### 调用失败时的额度提示
+
+Claude 官方错误参考明确列出会话、周额度以及 Opus/Sonnet 模型家族上限提示，并可能给出恢复时间。会话/周额度为共享限制，模型家族限制只影响对应家族；本工具当前均先暂停该成员，由主持人核对后恢复。已补齐对 `session`、`Opus`、`Sonnet` 上限文字的识别。Codex App Server 有 `codexErrorInfo: usageLimitExceeded`，但本版模型生成仍走 `exec`，未接入该生成事件通道。agy 的失败可由非零退出码、`status` 和 `error` 读取，目前没有核验到统一的额度专属错误码。HTTP 429 本身只能作为限流依据。
+
+依据：[Claude 限额错误](https://code.claude.com/docs/en/errors#youve-hit-your-session-limit)、[Codex App Server 错误](https://learn.chatgpt.com/docs/app-server#errors)、[agy 失败状态](https://antigravity.google/docs/cli/headless/#handle-exit-codes-and-errors)。
+
 选择更适合任务的模型、限制无效讨论、缩短重复上下文，有助于控制消耗；不能由 API 价格表推算三家会员还剩多少额度，也不能预先承诺节省百分比。订阅消耗受模型、任务、上下文、推理、工具与服务端规则共同影响。自动路由应记录可观测用量与完成质量，把节省视为优化目标。
 
 Claude 官方说明不同产品端共享使用限制，模型和努力等级都影响消耗。Codex 官方说明可完成任务数并不固定，依套餐和任务设置而变；其用量查询应使用后端实际数据。Antigravity 官方说明额度与智能体完成的工作量相关，并受容量及套餐影响。

@@ -445,7 +445,7 @@ def classify_cli_failure(message) -> str:
         r"\bquota[\s_-]+(?:(?:is|was|has been)\s+)?(?:exhausted|exceeded|depleted)\b",
         r"\bexceeded\s+(?:(?:your|the|current|available)\s+)*quota\b",
         r"\busage[\s_-]+limit[\s_-]+(?:(?:is|was|has been)\s+)?(?:reached|exceeded)\b",
-        r"\byou(?:'ve| have)\s+hit\s+your\s+(?:(?:usage|message|weekly|daily|monthly)\s+)?limit\b",
+        r"\byou(?:'ve| have)\s+hit\s+your\s+(?:(?:usage|message|session|weekly|daily|monthly|opus|sonnet)\s+)?limit\b",
         r"\bno\s+remaining\s*quota\b",
         r"\bno\s+quota\s+remaining\b",
         r"额度(?:已(?:经)?)?(?:用尽|用完|耗尽|不足)",
