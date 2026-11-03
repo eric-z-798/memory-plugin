@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI 群聊 —— 让 Claude、GPT、Gemini 在同一个群里讨论和协作。
+"""星枢 XINGSHU —— 多模型协作与共享记忆空间。
 
 常用启动方式：
     python3 run.py                      本机使用，自动打开浏览器
@@ -30,7 +30,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from aigc import __version__  # noqa: E402
+from aigc import APP_NAME, APP_NAME_LATIN, __version__  # noqa: E402
 from aigc.engine import Engine  # noqa: E402
 from aigc.members import Registry  # noqa: E402
 from aigc.server import App, make_server  # noqa: E402
@@ -40,7 +40,7 @@ LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
 
 def parse_args(argv):
-    p = argparse.ArgumentParser(description="AI 群聊：让 Claude、GPT、Gemini 在同一个群里讨论和协作")
+    p = argparse.ArgumentParser(description=APP_NAME + " " + APP_NAME_LATIN + "：多模型协作与共享记忆空间")
     p.add_argument("--host", default="127.0.0.1",
                    help="监听地址。默认 127.0.0.1（只允许本机访问）；云服务器上要远程访问时用 0.0.0.0，并且必须设置 --password")
     p.add_argument("--port", type=int, default=8765, help="端口，默认 8765；被占用时自动往后找")
@@ -85,7 +85,7 @@ def main(argv=None):
 
     shown_host = "localhost" if local_only else args.host
     url = "http://%s:%d" % (shown_host if ":" not in shown_host else "[%s]" % shown_host, port)
-    print("AI 群聊 %s 已启动%s" % (__version__, "（演示模式：不调用真实命令行，不消耗额度）" if args.demo else ""))
+    print("%s %s %s 已启动%s" % (APP_NAME, APP_NAME_LATIN, __version__, "（演示模式：不调用真实命令行，不消耗额度）" if args.demo else ""))
     print("数据保存在：%s" % store.root)
     if local_only:
         print("在浏览器打开：%s" % url)

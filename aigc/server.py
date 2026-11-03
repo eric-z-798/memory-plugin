@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import __version__
+from . import APP_NAME, APP_NAME_LATIN, APP_TAGLINE, __version__
 from . import board as board_mod
 from .common import MEMBER_ORDER, name_of
 from .store import StoreError
@@ -165,7 +165,7 @@ def export_markdown(group: dict, board: dict, messages: list) -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AIGroupChat/" + __version__
+    server_version = "Xingshu/" + __version__
     protocol_version = "HTTP/1.1"
 
     @property
@@ -232,7 +232,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise HttpError(405, "不支持的请求方法")
             raise HttpError(404, "找不到这个地址")
         except HttpError as exc:
-            extra = {"WWW-Authenticate": 'Basic realm="AI Group Chat", charset="UTF-8"'} if exc.status == 401 else None
+            extra = {"WWW-Authenticate": 'Basic realm="XINGSHU", charset="UTF-8"'} if exc.status == 401 else None
             # 请求体可能还没读完，回完错误就断开，免得剩下的内容被当成下一个请求
             self.close_connection = True
             extra = dict(extra or {}, Connection="close")
@@ -331,6 +331,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_info(self, body):
         self.send_json(200, {
+            "name": APP_NAME, "name_latin": APP_NAME_LATIN, "tagline": APP_TAGLINE,
             "version": __version__, "demo": self.app.demo, "password": bool(self.app.password),
             "local_only": self.app.local_only, "platform": sys.platform,
         })

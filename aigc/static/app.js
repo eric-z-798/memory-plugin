@@ -1,4 +1,4 @@
-/* AI 群聊 前端：原生 JavaScript，不依赖任何外部库。 */
+/* 星枢 XINGSHU 前端：原生 JavaScript，不依赖任何外部库。 */
 'use strict';
 
 (() => {

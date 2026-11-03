@@ -238,7 +238,7 @@ def _codex_query(cmd, env, timeout):
 
         try:
             send({"id": 0, "method": "initialize", "params": {"clientInfo": {
-                "name": "ai_group_chat_quota", "title": "AI Group Chat quota", "version": "0.3.0"}}})
+                "name": "ai_group_chat_quota", "title": "XINGSHU quota", "version": "0.3.0"}}})
             response(0)
             send({"method": "initialized"})
             send({"id": 1, "method": "account/read", "params": {"refreshToken": False}})

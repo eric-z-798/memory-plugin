@@ -23,6 +23,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from aigc.members import CLI_INFO, find_command, member_env
+from aigc import APP_NAME
 from aigc.network import apply_proxy, clean_proxy, _ExplicitProxyHandler
 from aigc.setup import INSTALL_URLS, JOB_ID, LOGIN_ARGS, _platform, _read_json, _write_private_json
 
@@ -261,7 +262,7 @@ def perform(directory):
     conf = {"command": config.get("command") or ""}
     command = find_command(member, conf)
     _cancelled(directory)
-    print("AI 群聊 · %s 安装与登录\n浏览器授权由你本人完成。本窗口不会向群聊发送模型请求。" % CLI_INFO[member]["cli"], flush=True)
+    print("%s · %s 安装与登录\n浏览器授权由你本人完成。本窗口不会向群聊发送模型请求。" % (APP_NAME, CLI_INFO[member]["cli"]), flush=True)
     if action == "install" or (action == "setup" and not command):
         installer = _download_installer(member, directory, env)
         try:
@@ -309,7 +310,7 @@ def main(argv=None):
         _state(directory, "failed", "流程未能完成，请查看终端或刷新检测；未保存账号授权输出。")
         print("流程未能完成，请检查终端和网络设置。", file=sys.stderr)
         result = 1
-    print("请返回 AI 群聊页面刷新安装和登录状态。", flush=True)
+    print("请返回%s页面刷新安装和登录状态。" % APP_NAME, flush=True)
     if sys.stdin.isatty():
         try:
             input("按 Enter 关闭此窗口。")

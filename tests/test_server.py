@@ -74,7 +74,7 @@ class ApiTest(Base):
     def test_static_files(self):
         status, body, res = self.request("GET", "/")
         self.assertEqual(status, 200)
-        self.assertIn("AI 群聊", body)
+        self.assertIn("星枢 XINGSHU", body)
         self.assertIn("default-src 'self'", res.getheader("Content-Security-Policy"))
         for path in ("/static/app.js", "/static/style.css", "/static/favicon.svg"):
             self.assertEqual(self.request("GET", path)[0], 200, path)

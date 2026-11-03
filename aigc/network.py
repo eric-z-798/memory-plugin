@@ -172,7 +172,7 @@ def network_probe(member, settings):
         try:
             opener = urllib.request.build_opener(_ExplicitProxyHandler(env), _NoRedirect())
             request = urllib.request.Request(_ENDPOINTS[member], method="HEAD",
-                                             headers={"User-Agent": "AIGroupChat-network-check"})
+                                             headers={"User-Agent": "Xingshu-network-check"})
             try:
                 with opener.open(request, timeout=_PROBE_TIMEOUT) as response:
                     code = response.getcode()

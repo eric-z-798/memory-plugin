@@ -1,4 +1,4 @@
-/* AI 群聊 —— 议事厅：三位成员各有一个座位色，三家都同意的决议盖上朱砂印。 */
+/* 星枢 XINGSHU：多模型协作与共享记忆空间。 */
 
 :root {
   --paper: #e8ecf0;
@@ -177,6 +177,7 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--f
 .brand-mark i:nth-child(2) { left: 0; top: 12px; background: var(--gpt); }
 .brand-mark i:nth-child(3) { left: 14px; top: 12px; background: var(--gemini); }
 .brand-name { font-family: var(--font-serif); font-size: 19px; font-weight: 700; letter-spacing: .04em; }
+.brand-latin { display: block; margin-top: 3px; font-family: var(--font-sans); font-size: 9px; font-weight: 600; letter-spacing: .2em; color: var(--ink-3); }
 
 .group-list { flex: 1; overflow-y: auto; margin: 0 -4px; padding: 0 4px; min-height: 0; }
 .group-item {
@@ -331,6 +332,9 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--f
 /* 欢迎页 */
 .welcome { flex: 1; overflow-y: auto; padding: 8vh 24px 24px; }
 .welcome-inner { max-width: 560px; margin: 0 auto; }
+.welcome-brand { margin: 0 0 18px; color: var(--ink-2); font-size: 16px; font-weight: 600; }
+.welcome-brand span { margin-left: 8px; font-size: 11px; letter-spacing: .18em; color: var(--ink-3); }
+.welcome-subtitle { margin: 0 0 20px; color: var(--ink-2); line-height: 1.7; }
 .welcome h2 { font-family: var(--font-serif); font-size: 28px; line-height: 1.35; margin: 0 0 18px; letter-spacing: .02em; }
 .welcome .seat-line { display: flex; gap: 8px; margin-bottom: 22px; }
 .welcome .seat { cursor: default; }
