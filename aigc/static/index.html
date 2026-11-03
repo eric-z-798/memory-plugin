@@ -1,13 +1,16 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#080b12">
 <meta name="description" content="星枢 XINGSHU，多模型协作与共享记忆空间。让智能协同，让记忆延续。">
 <title>星枢 XINGSHU · 多模型协作与共享记忆</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/memory-atlas.css">
+<script src="/static/memory-atlas.js" defer></script>
 <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -15,14 +18,24 @@
 
   <aside class="sidebar" id="sidebar" aria-label="群聊列表">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none"><path d="M20 3 24.6 15.4 37 20 24.6 24.6 20 37 15.4 24.6 3 20 15.4 15.4Z" fill="currentColor"/><circle cx="20" cy="20" r="5.5" fill="#101522"/><circle cx="32" cy="7" r="2.5" fill="#a78bfa"/></svg></span>
       <span class="brand-name">星枢<span class="brand-latin">XINGSHU</span></span>
+      <span class="brand-version">你的 AI 空间</span>
     </div>
-    <button class="btn primary block" id="btn-new" type="button">新建群聊</button>
+    <button class="btn primary block new-chat" id="btn-new" type="button"><span aria-hidden="true">＋</span> 新建群聊</button>
+    <button class="memory-home" id="btn-memory-home" type="button">
+      <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M7 9 23 6 26 23 12 27 7 9ZM7 9 26 23M23 6 12 27" stroke="currentColor" stroke-width="1.1"/><circle cx="7" cy="9" r="3" fill="currentColor"/><circle cx="23" cy="6" r="2.5" fill="#a78bfa"/><circle cx="26" cy="23" r="3" fill="currentColor"/><circle cx="12" cy="27" r="2" fill="#a78bfa"/></svg>
+      <span><strong>记忆宇宙</strong><small>每一次积累，都有迹可循</small></span>
+      <span class="nav-chevron" aria-hidden="true">›</span>
+    </button>
+    <p class="nav-section-label">我的对话 <span>WORKSPACE</span></p>
     <nav class="group-list" id="group-list" aria-label="我的群聊"></nav>
-    <button class="btn ghost block" id="btn-memory-side" type="button" disabled>共享记忆</button>
-    <button class="btn ghost block" id="btn-setup" type="button">安装与登录</button>
-    <button class="btn ghost block" id="btn-settings" type="button">成员与连接</button>
+    <div class="sidebar-tools">
+      <button class="btn ghost block" id="btn-memory-side" type="button" disabled><span aria-hidden="true">◎</span> 本群共享记忆</button>
+      <button class="btn ghost block" id="btn-setup" type="button"><span aria-hidden="true">↗</span> 连接 AI 伙伴</button>
+      <button class="btn ghost block" id="btn-settings" type="button"><span aria-hidden="true">⚙</span> 成员与连接</button>
+    </div>
+    <p class="sidebar-footnote"><span aria-hidden="true"></span> 记忆保存在你的设备上</p>
   </aside>
   <div class="scrim" id="scrim"></div>
 
@@ -38,10 +51,10 @@
       <div class="seats" id="seats" role="group" aria-label="在群成员，点击可让成员进出群"></div>
       <div class="head-actions">
         <div class="seg" id="mode-seg" role="radiogroup" aria-label="发言方式">
-          <button type="button" role="radio" data-mode="sequential" title="一个接一个发言，后面的能看到前面的">依次</button>
-          <button type="button" role="radio" data-mode="parallel" title="同时独立作答，互相看不到，答完再互评">背靠背</button>
+          <button type="button" role="radio" data-mode="sequential" title="一个接一个发言，后面的能看到前面的">一起讨论</button>
+          <button type="button" role="radio" data-mode="parallel" title="同时独立作答，互相看不到，答完再互评">先独立思考</button>
         </div>
-        <button class="btn" id="btn-models" type="button" title="本群的模型选择与预览">模型</button>
+        <button class="btn" id="btn-models" type="button" title="选择 AI 模型与查看额度">模型</button>
         <button class="btn" id="btn-memory" type="button" title="管理项目记忆与跨群共享">记忆</button>
         <button class="btn" id="btn-continue" type="button">继续讨论</button>
         <button class="btn danger" id="btn-stop" type="button" hidden>停止</button>
@@ -75,7 +88,7 @@
           <span class="hint">Enter 发送，Shift+Enter 换行</span>
         </div>
         <div class="compose-row">
-          <textarea id="input" rows="1" placeholder="说点什么。@某一位可以只请它回答" aria-label="输入消息"></textarea>
+          <textarea id="input" rows="1" placeholder="告诉 AI 伙伴，你想一起解决什么…" aria-label="输入消息"></textarea>
           <button class="btn primary" id="btn-send" type="submit">发送</button>
         </div>
       </div>
@@ -86,38 +99,46 @@
         <button class="icon-btn only-narrow" id="btn-menu-2" type="button" aria-label="打开群聊列表">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
         </button>
-        <p class="welcome-brand">星枢 <span>XINGSHU</span></p>
-        <h2>让智能协同，<br>让记忆延续。</h2>
-        <p class="welcome-subtitle">连接 Claude、GPT、Gemini 的协作与共享记忆空间</p>
+        <div class="welcome-orbit" aria-hidden="true">
+          <svg viewBox="0 0 360 180" fill="none"><defs><radialGradient id="hero-glow"><stop stop-color="#67e8f9" stop-opacity=".22"/><stop offset="1" stop-color="#67e8f9" stop-opacity="0"/></radialGradient><linearGradient id="hero-line"><stop stop-color="#67e8f9" stop-opacity="0"/><stop offset=".5" stop-color="#67e8f9" stop-opacity=".8"/><stop offset="1" stop-color="#a78bfa" stop-opacity="0"/></linearGradient></defs><ellipse cx="180" cy="90" rx="150" ry="85" fill="url(#hero-glow)"/><ellipse cx="180" cy="94" rx="133" ry="44" stroke="url(#hero-line)" transform="rotate(-17 180 94)"/><ellipse cx="180" cy="94" rx="105" ry="55" stroke="url(#hero-line)" transform="rotate(29 180 94)"/><circle cx="180" cy="90" r="39" fill="#0c1422" stroke="#67e8f9" stroke-opacity=".3"/><path d="m180 66 6.7 17.3L204 90l-17.3 6.7L180 114l-6.7-17.3L156 90l17.3-6.7Z" fill="#a6f0fa"/><circle cx="58" cy="105" r="5" fill="#fb8a79"/><circle cx="262" cy="60" r="5" fill="#a78bfa"/><circle cx="240" cy="143" r="4" fill="#67e8f9"/><circle cx="103" cy="31" r="2" fill="#a78bfa"/><circle cx="306" cy="124" r="2" fill="#67e8f9"/></svg>
+        </div>
+        <p class="welcome-brand"><span class="welcome-dot" aria-hidden="true"></span> 星枢 <span>XINGSHU</span></p>
+        <h2>让每一次对话，<br>成为下一次的<span>起点。</span></h2>
+        <p class="welcome-subtitle">三位 AI 伙伴，一个共同的记忆。<br>一起讨论、做决定，让重要的事情被记住。</p>
         <div class="seat-line">
           <span class="seat m-claude">Claude</span>
           <span class="seat m-gpt">GPT</span>
           <span class="seat m-gemini">Gemini</span>
         </div>
-        <ul>
-          <li>每个群围绕一个项目或问题。你说一句，三家依次或背靠背回答，彼此都能看到对方说了什么。</li>
-          <li>需要拍板的事写进右边的共享看板：三家都同意才生效。你随时可以提意见、直接确认或否决。</li>
-          <li>把重要信息存入共享记忆。三家发言前会读取相关记忆，同一项目的新群也能接续背景。</li>
-          <li>全部通过各家官方命令行和你自己的会员登录调用，不需要 API Key。</li>
-        </ul>
-        <div class="actions">
-          <button class="btn primary" id="btn-new-2" type="button">新建群聊</button>
-          <button class="btn" id="btn-setup-2" type="button">安装与登录</button>
-          <button class="btn" id="btn-settings-2" type="button">检查成员连接</button>
+        <div class="actions welcome-actions">
+          <button class="btn primary" id="btn-new-2" type="button">开始第一次讨论 <span aria-hidden="true">↗</span></button>
+          <button class="btn" id="btn-setup-2" type="button">连接 AI 伙伴</button>
         </div>
+        <div class="welcome-steps" aria-label="使用步骤">
+          <div><span class="step-number">01</span><strong>连接伙伴</strong><p>跟着引导，登录你的 AI 账号</p></div>
+          <div><span class="step-number">02</span><strong>说出想法</strong><p>一个问题，让三家一起讨论</p></div>
+          <div><span class="step-number">03</span><strong>留下记忆</strong><p>确认重要信息，下次接着聊</p></div>
+        </div>
+        <button class="link-btn welcome-check" id="btn-settings-2" type="button">已配置过？检查成员连接 <span aria-hidden="true">→</span></button>
       </div>
     </section>
   </main>
 
   <aside class="board" id="board" aria-label="共享看板">
     <div class="board-head">
-      <h2>共享看板</h2>
+      <div><span class="section-eyebrow">一起推进</span><h2>共享看板</h2></div>
       <span class="rev" id="board-rev"></span>
     </div>
     <div class="board-body" id="board-body"></div>
   </aside>
 </div>
 
+<nav class="mobile-bottom-nav" aria-label="主要功能">
+  <button id="nav-chat" type="button" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l-3 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z"/><path d="M7 10h8M7 14h5"/></svg><span>对话</span></button>
+  <button id="nav-memory" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 7 11-3 4 13-12 4L6 7Zm0 0 15 10M17 4 9 21"/><circle cx="6" cy="7" r="2" fill="currentColor"/><circle cx="17" cy="4" r="2" fill="currentColor"/><circle cx="21" cy="17" r="2" fill="currentColor"/><circle cx="9" cy="21" r="2" fill="currentColor"/></svg><span>记忆</span></button>
+  <button id="nav-board" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M5 19V13M12 19V5M19 19V9"/><path d="M3 21h18"/></svg><span>进展</span></button>
+  <button id="nav-settings" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="#0b101b"/><circle cx="15" cy="17" r="3" fill="#0b101b"/></svg><span>设置</span></button>
+</nav>
 <div id="modal-root"></div>
 <div class="toast-root" id="toast-root" aria-live="polite"></div>
 </body>

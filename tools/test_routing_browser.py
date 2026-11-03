@@ -68,7 +68,7 @@ def run_browser(base, data_dir):
         browser = playwright.chromium.launch(
             executable_path=shutil.which("chromium") or None,
             headless=True, args=["--no-sandbox"])
-        page = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=1)
+        page = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=1, reduced_motion="reduce")
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.on("console", lambda message: errors.append("console: " + message.text)
                 if message.type == "error" else None)

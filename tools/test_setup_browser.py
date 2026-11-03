@@ -89,7 +89,7 @@ def run_browser(base, sentinel):
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(executable_path=shutil.which("chromium") or None,
                                              headless=True, args=["--no-sandbox"])
-        page = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=1)
+        page = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=1, reduced_motion="reduce")
         page.add_init_script("""window.__copiedSetupCommands = [];
             Object.defineProperty(navigator, 'clipboard', {configurable: true,
                 value: {writeText: async text => window.__copiedSetupCommands.push(text)}});""")
@@ -171,8 +171,11 @@ def run_browser(base, sentinel):
 
         def open_wizard():
             page.locator("#btn-setup").click()
-            expect(page.get_by_label("联网方式", exact=True)).to_be_visible()
             expect(page.locator(".setup-member")).to_have_count(3)
+            proxy_settings = page.locator("details.setup-proxy")
+            if proxy_settings.get_attribute("open") is None:
+                proxy_settings.locator("summary").click()
+            expect(page.get_by_label("联网方式", exact=True)).to_be_visible()
 
         def card(member):
             return page.locator('[data-setup-member="%s"]' % member)
@@ -219,7 +222,7 @@ def run_browser(base, sentinel):
                 expect(page.get_by_role("button", name=name + " 一键安装并登录", exact=True)).to_be_disabled()
                 expect(page.get_by_role("button", name=name + " 仅打开登录", exact=True)).to_be_disabled()
                 expect(page.get_by_role("button", name=name + " 保存并测试网络", exact=True)).to_be_disabled()
-                expect(card(member).locator(".setup-install-state")).to_have_text("尚未检测到 CLI")
+                expect(card(member).locator(".setup-install-state")).to_have_text("需要安装官方客户端")
                 expect(card(member).locator(".setup-auth")).to_contain_text("演示模式，不代表真实安装或登录")
             assert not starts and not network_calls
             checks.append("demo onboarding defaults and disabled native actions make no installation/login claim")
@@ -289,7 +292,7 @@ def run_browser(base, sentinel):
             expect(page.locator(".setup-host-notice")).to_contain_text("运行本工具的电脑")
             expect(page.get_by_role("button", name="Claude 仅打开登录", exact=True)).to_be_disabled()
             expect(page.get_by_role("button", name="GPT 仅打开登录", exact=True)).to_be_enabled()
-            expect(card("gpt")).to_contain_text("会跳过安装")
+            expect(card("gpt")).to_contain_text("点击后打开官方登录")
             assert not starts and not network_calls
             verify_rendering()
             expect(page.locator(".toast")).to_have_count(0, timeout=10000)
@@ -318,7 +321,7 @@ def run_browser(base, sentinel):
             start_job("claude", "setup")
             set_job("claude", "failed")
             expect(card("claude").locator(".setup-job-state")).to_have_text("流程失败", timeout=5000)
-            expect(card("claude").locator(".setup-install-state")).to_have_text("尚未检测到 CLI")
+            expect(card("claude").locator(".setup-install-state")).to_have_text("需要安装官方客户端")
             expect(card("claude").locator(".setup-auth")).to_contain_text("未检测到命令", timeout=5000)
             gemini_job = start_job("gemini", "setup")
             set_job("gemini", "running")

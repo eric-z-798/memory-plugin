@@ -273,6 +273,7 @@
   // ------------------------------------------------------------ 弹窗和菜单
   function closeModal() {
     $('#modal-root').replaceChildren();
+    setNavigation(S.tab === 'board' ? 'board' : 'chat');
     if (S.modalReturn && document.contains(S.modalReturn)) {
       try { S.modalReturn.focus(); } catch (e) { /* ignore */ }
     }
@@ -281,6 +282,7 @@
 
   function openModal({ title, body, actions, wide }) {
     closeMenu();
+    setNavigation(title.includes('记忆') ? 'memory' : /设置|安装|登录|连接|使用指南/.test(title) ? 'settings' : S.tab);
     const error = h('p', { class: 'modal-error', role: 'alert' });
     let primaryBtn = null;
     const buttons = (actions || [{ label: '关闭' }]).map((a) => {
@@ -929,7 +931,7 @@
     const g = S.group;
     if (!g) return;
     $('#group-title').textContent = g.name;
-    const mode = g.mode === 'parallel' ? '背靠背发言' + (g.parallel_review === false ? '' : '，答完互评') : '依次发言';
+    const mode = g.mode === 'parallel' ? '先独立思考' + (g.parallel_review === false ? '' : '，再互相点评') : '一起讨论';
     const auto = g.auto_rounds ? '有人没表态或有分歧时自动续 ' + g.auto_rounds + ' 轮' : '不自动续轮';
     $('#group-sub').textContent = mode + '；' + auto;
     const speaking = new Set((S.state.speaking || []).map((s) => s.member));
@@ -1464,7 +1466,7 @@
     const controls = {};
     const rows = MEMBERS.map((member) => {
       const current = (group.model_overrides || {})[member] || {};
-      const mode = select([['inherit', '沿用成员设置'], ['auto', '自动选择档位'], ['manual', '手动指定模型']], current.mode || 'inherit');
+      const mode = select([['inherit', '跟随默认设置'], ['auto', '按问题自动选择'], ['manual', '由我指定模型']], current.mode || 'inherit');
       const model = textInput(current.model || '', '留空使用 CLI 默认模型');
       model.maxLength = 200;
       const modelField = field(NAMES[member] + ' 指定模型', model);
@@ -1553,8 +1555,8 @@
     const g = S.group;
     const name = textInput(g.name);
     const seats = seatPicker(g.members);
-    const mode = segPicker([['sequential', '依次'], ['parallel', '背靠背']], g.mode);
-    const review = check('背靠背答完后，让大家互评一轮', g.parallel_review !== false);
+    const mode = segPicker([['sequential', '一起讨论'], ['parallel', '先独立思考']], g.mode);
+    const review = check('各自回答后，让大家互评一轮', g.parallel_review !== false);
     const auto = select([0, 1, 2, 3, 4, 5].map((n) => [String(n), n ? '最多续 ' + n + ' 轮' : '不自动续轮']), String(g.auto_rounds == null ? 2 : g.auto_rounds));
     const length = select(Object.entries(REPLY_LENGTH), g.reply_length || 'medium');
     const sec = select([['rotate', '轮流担任']].concat(MEMBERS.map((m) => [m, NAMES[m]])), g.secretary || 'rotate');
@@ -1571,10 +1573,10 @@
         field('发言方式', mode.node, '依次：一个接一个，后面的人能看到前面的发言。背靠背：同时独立作答，互相看不到，适合要独立意见的问题。'),
         review.node,
         h('div', { class: 'row' },
-          field('自动续轮', auto, '一轮结束后还有人没表态、或有反对意见时，自动再讨论几轮。'),
+          field('继续讨论的轮数', auto, '一轮结束后还有人没表态、或有反对意见时，自动再讨论几轮。'),
           field('每次发言长度', length)),
         h('div', { class: 'row' },
-          field('书记员', sec, '负责把较早的讨论整理成前情摘要。'),
+          field('总结由谁负责', sec, '负责把较早的讨论整理成前情摘要。'),
           field('讨论语言', lang)),
         h('details', { class: 'advanced group-model-settings' }, h('summary', {}, '本群模型选择'), modelFields.node),
       ],
@@ -1591,21 +1593,24 @@
   }
 
   function openNewGroup() {
-    const name = textInput('', '比如：AICRM 方案讨论');
+    const name = textInput('', '比如：我的新项目');
     const goal = textarea('', '想达成什么？写清楚目标、范围和约束，三家会围绕它讨论', 4);
     const seats = seatPicker(MEMBERS);
-    const mode = segPicker([['sequential', '依次'], ['parallel', '背靠背']], 'sequential');
-    const first = textarea('', '可选。创建后立即发到群里，三家开始讨论', 3);
+    const mode = segPicker([['sequential', '一起讨论'], ['parallel', '先独立思考']], 'sequential');
+    const first = textarea('', '比如：帮我比较这两个方案，先分析各自优缺点。也可以稍后再发。', 4);
     const project = projectPicker('', '');
     openModal({
       title: '新建群聊',
       body: [
+        h('p', { class: 'new-group-intro' }, '把问题说出来，让三位 AI 一起想。'),
         field('群名', name),
-        project.node,
-        field('群目标（可选）', goal, '会写在共享看板最上面，三家每次发言前都会看到。'),
-        field('成员', seats.node),
-        field('发言方式', mode.node, '依次：一个接一个，后面的人能看到前面的发言。背靠背：同时独立作答，答完再互评。'),
-        field('开场问题', first),
+        field('开场问题', first, '选填。填写后，创建群聊就会开始讨论，并使用已连接账号的额度。'),
+        h('p', { class: 'meta' }, '默认邀请 Claude、GPT、Gemini，按顺序交流观点。'),
+        h('details', { class: 'advanced more-options' }, h('summary', {}, '更多设置 · 共享项目、参与成员'),
+          project.node,
+          field('群目标（可选）', goal, '三家每次发言前都会看到这个目标。'),
+          field('成员', seats.node),
+          field('发言方式', mode.node, '一起讨论：后发言的 AI 可以看到前面的观点。先独立思考：各自回答，再互相点评。')),
       ],
       actions: [{ label: '取消' }, {
         label: '创建', primary: true,
@@ -1667,7 +1672,7 @@
   }
 
   // ------------------------------------------------------------ 共享记忆
-  const memoryView = { query: '', status: 'all' };
+  const memoryView = { query: '', status: 'all', mode: 'atlas' };
 
   function memoryPath(gid, id) {
     return '/api/groups/' + encodeURIComponent(gid) + '/memories' + (id ? '/' + encodeURIComponent(id) : '');
@@ -1731,24 +1736,67 @@
   }
 
   async function openMemories() {
-    if (!S.gid || !S.group) { toast('请先打开一个群聊'); return; }
+    if (!S.gid || !S.group) { toast('先打开一个项目，就能查看它的记忆'); return; }
     document.body.classList.remove('drawer-open');
     const gid = S.gid;
     const heading = h('div', { class: 'memory-overview' }, h('strong', {}, '正在读取项目……'));
-    const search = textInput(memoryView.query, '搜索记忆，例如：预算、交付时间');
+    const confirmedCount = h('strong', {}, '—');
+    const pendingCount = h('strong', {}, '—');
+    const stats = h('div', { class: 'memory-stat-row' },
+      h('div', { class: 'memory-stat' }, confirmedCount, h('span', {}, '可以使用')),
+      h('div', { class: 'memory-stat pending' }, pendingCount, h('span', {}, '等你确认')));
+    const search = textInput(memoryView.query, '找一条记忆，比如偏好、预算……');
     search.setAttribute('aria-label', '搜索记忆');
     search.maxLength = 500;
-    const status = select([['all', '全部状态'], ['confirmed', '已确认'], ['pending', '待确认']], memoryView.status);
+    const status = select([['all', '全部记忆'], ['confirmed', '已确认'], ['pending', '待确认']], memoryView.status);
     status.setAttribute('aria-label', '筛选记忆状态');
-    const list = h('div', { class: 'memory-list', 'aria-live': 'polite' });
+    const list = h('div', { class: 'memory-list', role: 'tabpanel', 'aria-label': '记忆列表' });
     const count = h('span', { class: 'meta' });
     const refresh = h('button', { type: 'button', class: 'btn small' }, '刷新');
-    const body = h('div', { class: 'memory-browser' }, heading,
-      h('p', { class: 'memory-description' }, '同一项目的群聊共享记忆；全局记忆会提供给所有项目。只有已确认的内容会进入后续对话。'),
+    const detail = h('aside', { class: 'memory-detail', 'aria-label': '选中的记忆', 'aria-live': 'polite' });
+    function memoryCard(m) {
+      return h('article', { class: 'memory-card' + (m.status === 'pending' ? ' pending' : '') },
+        h('div', { class: 'memory-meta' },
+          h('span', { class: 'memory-state ' + m.status }, m.status === 'confirmed' ? '已确认' : '待确认'),
+          h('span', { class: 'tag' }, MEMORY_KINDS[m.kind] || m.kind),
+          h('span', { class: 'memory-scope' }, m.project_id === '*' ? '所有项目都可用' : '这个项目可用'),
+          h('time', { class: 'meta' }, fmtDay(m.updated || m.created))),
+        h('p', { class: 'memory-content' }, m.content),
+        h('div', { class: 'memory-card-foot' }, memorySource(m),
+          h('div', { class: 'item-actions' },
+            m.status === 'pending' ? h('button', { type: 'button', class: 'link-btn strong', onclick: () => editMemory(m, null, true) }, '核实并确认') : null,
+            h('button', { type: 'button', class: 'link-btn', onclick: () => editMemory(m) }, '编辑'),
+            h('button', { type: 'button', class: 'link-btn', onclick: () => memoryHistory(m, gid) }, '历史'),
+            h('button', { type: 'button', class: 'link-btn danger', onclick: () => deleteMemory(m, gid) }, '删除'))));
+    }
+    const atlas = window.XingshuMemoryAtlas ? window.XingshuMemoryAtlas.create({ onSelect: memory => {
+      detail.replaceChildren(h('h3', { class: 'memory-detail-heading' }, memory ? '这一颗星，记住了什么' : '记忆详情'));
+      if (memory) detail.append(memoryCard(memory), h('p', { class: 'memory-detail-note' }, memory.status === 'pending'
+        ? '这条内容还没有进入 AI 的记忆。核实后确认，才能在后续讨论中使用。'
+        : '已确认的记忆会在讨论时按需提供给 AI。以后换一个群，也能接着这个项目继续聊。'));
+      else detail.append(h('p', { class: 'memory-detail-hint' }, '添加记忆后，点亮点查看它的内容和来源。'));
+    } }) : null;
+    const explore = h('div', { class: 'memory-explore', role: 'tabpanel', 'aria-label': '记忆星图' }, atlas ? atlas.element : null, detail);
+    const switcher = h('div', { class: 'memory-view-switch', role: 'tablist', 'aria-label': '记忆展示方式' });
+    const modeButtons = [];
+    const syncMode = () => {
+      const mode = atlas ? memoryView.mode : 'list';
+      explore.hidden = mode !== 'atlas'; list.hidden = mode !== 'list';
+      modeButtons.forEach(button => button.setAttribute('aria-selected', button.dataset.mode === mode ? 'true' : 'false'));
+    };
+    for (const [mode, label] of [['atlas', '星图'], ['list', '列表']]) {
+      const button = h('button', { type: 'button', role: 'tab', 'data-mode': mode, disabled: mode === 'atlas' && !atlas }, label);
+      button.addEventListener('click', () => { memoryView.mode = mode; syncMode(); });
+      modeButtons.push(button); switcher.append(button);
+    }
+    const body = h('div', { class: 'memory-browser' },
+      h('div', { class: 'memory-dashboard-head' }, heading, stats),
+      h('p', { class: 'memory-description' }, '不用每次从头解释。已确认的记忆会在讨论时按需提供给 AI，待确认的内容由你决定是否记住。'),
       h('div', { class: 'memory-toolbar' }, search, status,
-        h('button', { type: 'button', class: 'btn primary', onclick: () => editMemory() }, '添加记忆')),
-      h('div', { class: 'memory-list-head' }, count, refresh), list,
-      h('p', { class: 'meta' }, '记忆保存在本工具中，不会自动写入三家独立的官方 App。'));
+        h('button', { type: 'button', class: 'btn primary', onclick: () => editMemory() }, '＋ 添加记忆')),
+      h('div', { class: 'memory-list-head' }, switcher, h('div', { class: 'row' }, count, refresh)), explore, list,
+      h('p', { class: 'memory-footnote' }, '记忆保存在星枢中，同一项目可以跨群共用；不会自动写入各家独立 App。'));
+    syncMode();
     let request = 0;
     let timer;
     const load = async () => {
@@ -1756,47 +1804,40 @@
       memoryView.query = search.value.trim();
       memoryView.status = status.value;
       refresh.disabled = true;
-      list.setAttribute('aria-busy', 'true');
-      if (!list.children.length) list.append(h('p', { class: 'memory-empty' }, '正在读取记忆……'));
+      body.setAttribute('aria-busy', 'true');
       try {
         const d = await api('GET', memoryPath(gid) + '?q=' + encodeURIComponent(memoryView.query) + '&status=' + encodeURIComponent(status.value));
         if (ticket !== request || !body.isConnected) return;
         const entries = d.memories || [];
-        heading.replaceChildren(h('span', { class: 'memory-symbol', 'aria-hidden': 'true' }, '◎'),
-          h('div', {}, h('strong', {}, (d.project && d.project.name) || '项目记忆'),
-            h('span', { class: 'meta' }, '跨会话保存 · 每轮按需读取')));
-        count.textContent = entries.length + ' 条' + (memoryView.query ? '匹配结果' : '记忆') + ' · 含全局共享';
-        list.replaceChildren(...entries.map((m) => h('article', { class: 'memory-card' + (m.status === 'pending' ? ' pending' : '') },
-          h('div', { class: 'memory-meta' },
-            h('span', { class: 'memory-state ' + m.status }, m.status === 'confirmed' ? '已确认' : '待确认'),
-            h('span', { class: 'tag' }, MEMORY_KINDS[m.kind] || m.kind),
-            h('span', { class: 'memory-scope' }, m.project_id === '*' ? '全局 · 所有项目' : '当前项目'),
-            h('time', { class: 'meta' }, fmtDay(m.updated || m.created))),
-          h('p', { class: 'memory-content' }, m.content),
-          h('div', { class: 'memory-card-foot' }, memorySource(m),
-            h('div', { class: 'item-actions' },
-              m.status === 'pending' ? h('button', { type: 'button', class: 'link-btn strong', onclick: () => editMemory(m, null, true) }, '核实并确认') : null,
-              h('button', { type: 'button', class: 'link-btn', onclick: () => editMemory(m) }, '编辑'),
-              h('button', { type: 'button', class: 'link-btn', onclick: () => memoryHistory(m, gid) }, '历史'),
-              h('button', { type: 'button', class: 'link-btn danger', onclick: () => deleteMemory(m, gid) }, '删除'))))));
+        heading.replaceChildren(h('div', {}, h('strong', {}, (d.project && d.project.name) || '项目记忆'),
+          h('span', { class: 'meta' }, '项目记忆 + 我的通用偏好')));
+        confirmedCount.textContent = entries.filter(m => m.status === 'confirmed').length;
+        pendingCount.textContent = entries.filter(m => m.status === 'pending').length;
+        count.textContent = entries.length + ' 条' + (memoryView.query || status.value !== 'all' ? '匹配记忆' : '记忆');
+        list.replaceChildren(...entries.map(memoryCard));
         if (!entries.length) list.append(h('div', { class: 'memory-empty' },
           h('strong', {}, memoryView.query ? '没有找到匹配的记忆' : status.value === 'pending' ? '没有待确认内容' : '从一条重要信息开始'),
           h('p', {}, memoryView.query ? '试试更短的关键词，或切换状态筛选。' : '可以手动添加，也可以在聊天消息旁点击“存入记忆”。')));
+        if (atlas) atlas.setEntries(entries, { filtered: !!memoryView.query || status.value !== 'all' });
       } catch (e) {
-        if (ticket === request && body.isConnected) list.replaceChildren(h('p', { class: 'modal-error', role: 'alert' }, e.message));
+        if (ticket === request && body.isConnected) {
+          list.replaceChildren(h('p', { class: 'modal-error', role: 'alert' }, e.message));
+          detail.replaceChildren(h('p', { class: 'modal-error', role: 'alert' }, e.message));
+        }
       } finally {
-        if (ticket === request) { refresh.disabled = false; list.removeAttribute('aria-busy'); }
+        if (ticket === request) { refresh.disabled = false; body.removeAttribute('aria-busy'); }
       }
     };
     search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 250); });
     search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(timer); load(); } });
     status.addEventListener('change', load);
     refresh.addEventListener('click', load);
-    openModal({ title: '共享记忆', body, wide: true, actions: [
-      { label: '导出全部记忆', onClick: async () => { await exportMemories(); return true; } },
-      { label: '预览上下文', onClick: () => { previewMemoryContext(gid, search.value); return true; } },
-      { label: '关闭' },
+    const modal = openModal({ title: '记忆宇宙', body, wide: true, actions: [
+      { label: '导出记忆', onClick: async () => { await exportMemories(); return true; } },
+      { label: '查看 AI 会读到的记忆', onClick: () => { previewMemoryContext(gid, search.value); return true; } },
+      { label: '返回对话' },
     ] });
+    modal.classList.add('memory-workspace');
     await load();
   }
 
@@ -2057,7 +2098,8 @@
       const active = running(job);
       const busy = actionBusy.has(member) || proxyBusy;
       const detection = S.members && S.members[member];
-      card.installed.textContent = info.installed ? '已检测到 ' + (info.command || 'CLI') : '尚未检测到 CLI';
+      card.installed.textContent = info.installed ? '官方客户端已安装' : '需要安装官方客户端';
+      card.setup.textContent = info.installed ? '连接账号' : '安装并连接';
       card.installed.className = 'setup-install-state ' + (info.installed ? 'installed' : 'missing');
       card.setup.disabled = !overview.can_launch || busy || active;
       card.login.disabled = !overview.can_launch || !info.installed || busy || active;
@@ -2065,7 +2107,7 @@
       card.network.textContent = networkBusy.has(member) ? '正在测试网络……' : '保存并测试网络';
       card.cancel.hidden = !active;
       card.cancel.disabled = actionBusy.has(member);
-      card.skip.textContent = info.installed ? '已检测到 CLI；一键流程会跳过安装，直接进入登录。' : '一键流程会先安装 CLI，再打开登录。';
+      card.skip.textContent = info.installed ? '点击后打开官方登录，请在浏览器中完成授权。' : '先安装官方客户端，再打开登录；请在浏览器中完成授权。';
       const jobSignature = JSON.stringify([job && job.status, job && job.message, jobErrors[member]]);
       if (card.job.dataset.signature !== jobSignature) card.job.replaceChildren(...(job ? [
         h('strong', { class: 'setup-job-state ' + job.status }, SETUP_STATUS[job.status] || '状态未知'),
@@ -2284,7 +2326,7 @@
     }
     if (!modal.isConnected) return;
     const proxy = settings.proxy || { mode: 'system', url: '' };
-    proxyMode = select([['system', '继承启动环境（默认）'], ['direct', '直连（清除代理环境）'], ['custom', '自定义 HTTP(S) 代理']], proxy.mode || 'system');
+    proxyMode = select([['system', '跟随电脑的网络（推荐）'], ['direct', '直接连接'], ['custom', '使用 HTTP(S) 代理']], proxy.mode || 'system');
     proxyUrl = textInput(proxy.url || '', '例如 http://127.0.0.1:7890');
     proxyUrl.maxLength = 512;
     proxyForm = field('代理地址', proxyUrl, '仅填你已在使用的代理地址。不会自动探测端口；不支持 SOCKS 或带用户名、密码的地址。');
@@ -2318,15 +2360,16 @@
       acceptJob(member, info.active_job);
       return h('section', { class: 'setup-member m-' + member, 'data-setup-member': member },
         h('div', { class: 'setup-member-head' }, h('h3', {}, NAMES[member]), installed),
-        h('p', { class: 'setup-disk-note' }, '安装将下载并执行官方安装程序，写入 CLI 文件，并可能更新命令搜索路径。登录信息由官方 CLI 自行保存。'),
-        official ? h('p', { class: 'setup-official' }, '官方安装来源：', official) : null,
-        prerequisites.length ? h('ul', { class: 'setup-prerequisites' }, prerequisites) : null,
+        h('p', { class: 'setup-disk-note' }, '使用官方安装程序与登录页面，账号信息由官方客户端保存。'),
         h('div', { class: 'setup-actions' }, setupButton, loginButton, cancelButton), skip,
         info.login_note ? h('p', { class: 'meta' }, info.login_note) : null,
         job, auth, error,
         h('div', { class: 'setup-network-actions' }, networkButton,
           S.info.demo ? h('span', { class: 'meta' }, '演示模式不测试真实网络') : null), networkResult,
-        h('details', { class: 'setup-manual' }, h('summary', {}, '在自己的终端中操作'),
+        h('details', { class: 'setup-manual' }, h('summary', {}, '安装说明与手动操作'),
+          h('p', { class: 'meta' }, '安装会写入官方客户端文件，并可能更新命令搜索路径。'),
+          official ? h('p', { class: 'setup-official' }, '官方安装来源：', official) : null,
+          prerequisites.length ? h('ul', { class: 'setup-prerequisites' }, prerequisites) : null,
           setupCommand(NAMES[member] + ' 官方安装命令', info.install_command),
           setupCommand(NAMES[member] + ' 登录命令', info.login_command),
           h('p', { class: 'meta' }, '取消流程不会卸载已安装的文件。手动运行的终端不会自动继承本工具的联网设置。')));
@@ -2336,9 +2379,13 @@
       catch (e) { toast(e.message, true); }
     });
     body.replaceChildren(
-      h('p', { class: 'setup-intro' }, '先选联网方式，再为需要的成员打开安装和登录流程。所有操作发生在运行本工具的电脑上。'),
+      h('p', { class: 'setup-intro' }, '连接你已有的 AI 账号。下面的操作在运行星枢的电脑上完成。'),
+      h('ol', { class: 'setup-steps' },
+        h('li', {}, h('strong', {}, '1 · 选择 AI'), h('span', {}, '先连接一位也可以')),
+        h('li', {}, h('strong', {}, '2 · 点击连接'), h('span', {}, '需要时自动安装客户端')),
+        h('li', {}, h('strong', {}, '3 · 官方授权'), h('span', {}, '在浏览器登录并确认'))),
       hostNotice,
-      h('section', { class: 'setup-proxy' }, h('h3', {}, '联网设置'),
+      h('details', { class: 'setup-proxy', open: proxy.mode === 'custom' }, h('summary', {}, '联网设置 · 连接不上时再调整'),
         field('联网方式', proxyMode), proxyPlatformNote, proxyForm, proxyNotice,
         h('p', { class: 'meta' }, '只设置本工具启动的后续进程的代理环境，不修改系统网络或 CLI 全局配置。部分 CLI 仍可能读取系统代理或 PAC；浏览器登录页使用浏览器自己的网络设置。会为本地登录回调保留直连设置。')),
       h('div', { class: 'setup-check-head' }, h('h3', {}, '安装与登录'), verifyButton),
@@ -2411,16 +2458,16 @@
       h('div', {}, h('strong', {}, '需要安装、登录或配置代理？'), h('p', { class: 'meta' }, '打开引导面板；这里保留命令路径、模型等高级设置。')),
       h('button', { type: 'button', class: 'btn', onclick: openSetup }, '安装与登录')));
     if (S.info.demo) nodes.push(h('div', { class: 'hint-box' }, '当前是演示模式：不会调用真实命令行。真实使用时，去掉 --demo 重新启动程序。'));
-    else nodes.push(h('p', {}, '三家都通过各自的官方命令行调用，用的是你在这台电脑上登录的会员账号。先在终端里装好并登录，再回来点「测试连通」。'));
+    else nodes.push(h('p', {}, '使用这台电脑上已连接的官方账号。还没连接时，先打开“安装与登录”；发送测试消息会使用账号额度。'));
 
     for (const info of det.members) {
       const m = info.id;
       const conf = settings.members[m];
       const statusLines = [];
       if (info.installed) {
-        statusLines.push(h('div', {}, h('span', { class: 'ok' }, '✓ 已安装 '), info.version || '', info.path ? h('span', {}, '（', h('code', {}, info.path), '）') : null));
+        statusLines.push(h('div', {}, h('span', { class: 'ok' }, '✓ 官方客户端已安装')));
       } else {
-        statusLines.push(h('div', {}, h('span', { class: 'bad' }, '✗ 没有找到 '), h('code', {}, info.command), ' 命令'));
+        statusLines.push(h('div', {}, h('span', { class: 'bad' }, '尚未安装官方客户端，请先打开“安装与登录”。')));
       }
       if (info.installed) {
         const cls = info.auth_ok === true ? 'ok' : info.auth_ok === false ? 'bad' : 'unk';
@@ -2435,7 +2482,7 @@
       const f = {
         command: textInput(conf.command, '留空自动查找 ' + info.command),
         model: textInput(conf.model, '留空用默认模型'),
-        routingMode: select([['manual', '手动指定'], ['auto', '自动选择档位']], (conf.routing || {}).mode || 'manual'),
+        routingMode: select([['manual', '默认或指定模型'], ['auto', '按问题自动选择']], (conf.routing || {}).mode || 'manual'),
         profiles: {},
         extra: textInput(conf.extra_args, '一般不用填'),
         timeout: h('input', { type: 'number', min: '30', max: '3600', step: '30' }),
@@ -2462,7 +2509,7 @@
       f.timeout.value = conf.timeout;
       forms[m] = f;
       const result = h('span', { class: 'ping-result', role: 'status' });
-      const pingBtn = h('button', { type: 'button', class: 'btn small' }, '测试连通');
+      const pingBtn = h('button', { type: 'button', class: 'btn small', 'aria-label': '测试连通' }, '发送测试消息');
       pingBtn.addEventListener('click', async () => {
         pingBtn.disabled = true;
         result.className = 'ping-result';
@@ -2487,13 +2534,15 @@
         h('div', { class: 'member-status' }, statusLines),
         availabilityPanel(m),
         quotaPanel(m),
-        hint,
-        field('命令路径（可选）', f.command),
         h('div', { class: 'member-routing' },
           h('div', { class: 'row' }, field(NAMES[m] + ' 模型选择', f.routingMode), manualField), profiles),
-        h('div', { class: 'row' }, field('超时（秒）', f.timeout), field('附加参数（可选）', f.extra)),
-        f.web ? f.web.node : null,
-        h('div', {}, pingBtn, result)));
+        h('details', { class: 'advanced connection-advanced' }, h('summary', {}, '高级连接设置'),
+          info.version ? h('p', { class: 'meta' }, '客户端版本：' + info.version) : null,
+          info.path ? h('p', { class: 'meta' }, '位置：', h('code', {}, info.path)) : null,
+          hint, field('命令路径（可选）', f.command),
+          h('div', { class: 'row' }, field('超时（秒）', f.timeout), field('附加参数（可选）', f.extra)),
+          f.web ? f.web.node : null),
+        h('div', {}, pingBtn, result, h('p', { class: 'meta' }, '会使用账号额度；仅检查网络请到“安装与登录”。'))));
     }
 
     globalOnly = check('优先使用已登录账号，检查已知 API 路由（推荐）', settings.membership_only !== false);
@@ -2514,9 +2563,54 @@
     body.replaceChildren(...nodes);
   }
 
+  // ------------------------------------------------------------ 简明导航
+  function setNavigation(active) {
+    for (const name of ['chat', 'memory', 'board', 'settings']) {
+      const button = $('#nav-' + name);
+      if (!button) continue;
+      button.classList.toggle('is-active', name === active);
+      if (name === active) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    }
+    const memoryHome = $('#btn-memory-home');
+    if (memoryHome) memoryHome.classList.toggle('is-active', active === 'memory');
+  }
+
+  function openMemoryHome() {
+    document.body.classList.remove('drawer-open');
+    if (S.group) { openMemories(); return; }
+    openModal({ title: '开启你的记忆宇宙', body: [
+      h('p', {}, '先建一个群聊，记忆就有了归属。以后同一项目的讨论，都能接着这些背景继续。'),
+      h('p', { class: 'meta' }, '你可以手动记下重要信息，也可以从对话中保存；AI 提出的记忆由你确认。'),
+    ], actions: [{ label: '稍后再说' }, { label: '创建第一个群聊', primary: true,
+      onClick: () => { openNewGroup(); return true; } }] });
+  }
+
+  function openGuide() {
+    openModal({ title: '使用指南', body: h('div', { class: 'app-guide' },
+      h('section', {}, h('h3', {}, '01 · 连接你的 AI'), h('p', {}, '在设置中打开“连接 AI 账号”。星枢会辅助安装官方客户端，你在官方页面完成登录。')),
+      h('section', {}, h('h3', {}, '02 · 发起一场讨论'), h('p', {}, '新建群聊，写下问题。三位 AI 依次交流；想只问一位，可以在输入框上方点它的名字。')),
+      h('section', {}, h('h3', {}, '03 · 留下值得记住的事'), h('p', {}, '消息旁的“存入记忆”可以保存重要背景。待确认内容经你核实后，才会提供给以后的讨论。')),
+      h('section', {}, h('h3', {}, '04 · 随时查看进展'), h('p', {}, '“进展”收集共同目标、决议和分工。遇到分歧，你可以补充意见或作出决定。')),
+      h('p', { class: 'meta' }, '同一项目可以共享记忆；新群要接续背景，请在“更多设置”中选择已有项目。')),
+      actions: [{ label: '知道了', primary: true }] });
+  }
+
+  function openSettingsHome() {
+    document.body.classList.remove('drawer-open');
+    const tile = (title, description, action) => h('button', { type: 'button', class: 'settings-tile', onclick: action },
+      h('h3', {}, title), h('p', {}, description), h('span', { 'aria-hidden': 'true' }, '↗'));
+    openModal({ title: '设置', body: h('div', { class: 'settings-hub' },
+      h('p', { class: 'meta' }, '先连接账号，其余设置可以以后再调整。'),
+      tile('连接 AI 账号', '辅助安装、官方登录与网络设置', openSetup),
+      tile('模型与额度', '选择模型，查看可用状态和额度信息', openSettings),
+      tile('使用指南', '从第一次讨论到跨项目共享记忆', openGuide)), actions: [{ label: '关闭' }] });
+  }
+
   // ------------------------------------------------------------ 手机布局
   function setTab(tab) {
     S.tab = tab;
+    setNavigation(tab);
     document.body.classList.toggle('tab-board', tab === 'board');
     document.querySelectorAll('#tabs button').forEach((b) => b.setAttribute('aria-selected', b.dataset.tab === tab ? 'true' : 'false'));
     if (tab === 'chat') {
@@ -2536,6 +2630,15 @@
     $('#btn-memory').addEventListener('click', openMemories);
     $('#btn-models').addEventListener('click', openGroupModels);
     $('#btn-memory-side').addEventListener('click', openMemories);
+    $('#btn-memory-home')?.addEventListener('click', openMemoryHome);
+    $('#nav-chat')?.addEventListener('click', () => { closeModal(); setTab('chat'); document.body.classList.remove('drawer-open'); });
+    $('#nav-memory')?.addEventListener('click', openMemoryHome);
+    $('#nav-board')?.addEventListener('click', () => {
+      closeModal(); document.body.classList.remove('drawer-open');
+      if (S.group) setTab('board');
+      else toast('建一个群聊后，就能在这里查看目标和分工。');
+    });
+    $('#nav-settings')?.addEventListener('click', openSettingsHome);
     $('#btn-continue').addEventListener('click', continueDiscussion);
     $('#btn-stop').addEventListener('click', stopRound);
     $('#btn-more').addEventListener('click', openMoreMenu);
@@ -2600,7 +2703,11 @@
     loadMembers(false);
     const want = location.hash.slice(1) || store('aigc.gid');
     const target = S.groups.find((g) => g.id === want) || S.groups[0];
-    if (target) selectGroup(target.id); else showWelcome();
+    if (target) await selectGroup(target.id); else showWelcome();
+    const requestedView = new URLSearchParams(location.search).get('view');
+    if (requestedView === 'memory') openMemoryHome();
+    else if (requestedView === 'settings') openSettingsHome();
+    else if (requestedView === 'board' && S.group) setTab('board');
     setInterval(refreshGroups, 10000);
     setInterval(() => { if (S.state.running) renderTyping(); }, 1000);
   }
