@@ -8,6 +8,7 @@
   const TASK_LABEL = { proposed: '提议中', todo: '待办', doing: '进行中', done: '已完成', blocked: '阻塞', cancelled: '已取消' };
   const TASK_TAG = { mention: '被点名', parallel: '背靠背', review: '互评', continue: '继续讨论', vote: '补表态', debate: '针对分歧' };
   const REPLY_LENGTH = { short: '简短，约 300 字', medium: '适中，约 600 字', long: '详细，约 1200 字' };
+  const MODEL_TIERS = { fast: '快速', balanced: '均衡', deep: '深入', manual: '手动' };
   const MEMORY_KINDS = { note: '笔记', fact: '事实', preference: '偏好', decision: '决定', task: '任务' };
   const WEB_LABEL = {
     claude: '允许搜索网页（WebSearch、WebFetch）',
@@ -17,7 +18,7 @@
   const S = {
     info: {}, groups: [], gid: null, group: null, board: null, rev: -1,
     seqs: new Set(), lastSeq: 0, state: { running: false, speaking: [] }, offset: 0,
-    members: null, pollTimer: null, online: true, effective: null, tab: 'chat',
+    members: null, modelAvailability: {}, modelQuota: {}, pollTimer: null, online: true, effective: null, tab: 'chat',
     forceScroll: false, openFolds: new Set(['dec-closed']), menu: null, modalReturn: null, hasChat: false,
   };
 
@@ -475,6 +476,7 @@
     renderGroupList();
     $('#stream-inner').replaceChildren(h('p', { class: 'meta' }, '正在加载……'));
     let d;
+    const availabilitySnapshot = availabilityEpochSnapshot();
     try {
       d = await api('GET', '/api/groups/' + gid);
     } catch (e) {
@@ -487,6 +489,8 @@
     S.board = d.board;
     S.rev = d.board.rev || 0;
     S.state = d.state;
+    acceptAvailability(d.state.model_availability, availabilitySnapshot);
+    acceptQuota(d.state.model_quota);
     S.offset = d.now - Date.now() / 1000;
     $('#stream-inner').replaceChildren();
     appendMessages(d.messages);
@@ -517,11 +521,12 @@
     const gid = S.gid;
     if (!gid) return;
     let next = S.state.running ? 1200 : 3500;
+    const availabilitySnapshot = availabilityEpochSnapshot();
     try {
       const d = await api('GET', '/api/groups/' + gid + '/poll?after=' + S.lastSeq + '&rev=' + S.rev);
       if (gid !== S.gid) return;
       setOnline(true);
-      applyPoll(d);
+      applyPoll(d, availabilitySnapshot);
       next = S.state.running ? 1200 : 3500;
     } catch (e) {
       if (gid !== S.gid) return;
@@ -543,14 +548,17 @@
     return stream.scrollHeight - stream.scrollTop - stream.clientHeight < 160;
   }
 
-  function applyPoll(d) {
+  function applyPoll(d, availabilitySnapshot) {
     S.offset = d.now - Date.now() / 1000;
     if (d.group) S.group = d.group;
     const wasRunning = S.state.running;
     const stick = atBottom();
     S.state = d.state;
+    acceptAvailability(d.state.model_availability, availabilitySnapshot);
+    acceptQuota(d.state.model_quota);
     renderTyping();
     renderHeader();
+    renderBanner();
     if (d.messages && d.messages.length) appendMessages(d.messages, stick);
     if (stick) $('#stream').scrollTop = $('#stream').scrollHeight;
     if (d.board) {
@@ -578,11 +586,100 @@
     return h('button', { type: 'button', class: 'fx' + (done ? ' done' : ''), 'data-ref': m ? m[0] : null, title: m ? '在看板中查看' : null }, text);
   }
 
+  function modelRouteNode(route, preview) {
+    if (!route || typeof route !== 'object') return null;
+    const automatic = route.mode === 'auto';
+    const requested = route.requested_model || 'CLI 默认';
+    const tier = MODEL_TIERS[route.tier] || (automatic ? '自动' : '手动');
+    const source = route.source === 'group_override' ? '本群设置（优先）' : '成员与连接';
+    const reports = Array.isArray(route.reported_models) ? route.reported_models.map(String).filter(Boolean) : [];
+    if (route.reported_model && !reports.includes(String(route.reported_model))) reports.push(String(route.reported_model));
+    const rows = [
+      ['请求模型', requested],
+      ['选择方式', automatic ? '自动 · ' + tier : '手动'],
+      ['设置来源', source],
+    ];
+    if (route.reason) rows.push(['选择原因', String(route.reason)]);
+    if (!preview) {
+      if (route.simulation) rows.push(['运行情况', '演示模拟回复，未调用真实模型']);
+      if (reports.length && route.report_kind === 'usage') rows.push(['CLI 报告使用模型', reports.join('、') + (reports.length > 1 ? '（可能包含多个模型）' : '')]);
+      else if (reports.length && route.report_kind === 'configuration') rows.push(['CLI 配置回显', reports.join('、') + '（不代表实际后端模型）']);
+      else rows.push(['实际模型回报', 'CLI 未报告']);
+    }
+    return h('details', { class: 'model-route' + (route.simulation ? ' simulated' : '') },
+      h('summary', {},
+        route.simulation ? h('span', { class: 'route-badge' }, '模拟') : null,
+        h('span', {}, automatic ? '自动 · ' + tier : '手动'),
+        h('span', { class: 'route-requested' }, '请求：' + requested),
+        h('span', { class: 'route-expand' }, '详情')),
+      h('dl', {}, rows.map(([label, value]) => [h('dt', {}, label), h('dd', {}, value)])),
+      preview ? h('p', { class: 'meta' }, '此预览只计算选择结果，不调用模型、不消耗模型额度。') : null);
+  }
+
+  function incompleteNode(message) {
+    if (!message.incomplete) return null;
+    const member = message.retry_member;
+    const gid = S.gid;
+    const canRetry = MEMBERS.includes(member);
+    const pending = (S.state.incomplete_members || {})[member];
+    const current = canRetry && pending && Number(pending.seq) === Number(message.seq);
+    return h('div', { class: 'incomplete-reply', 'data-incomplete-member': member || '', 'data-incomplete-gid': gid, 'data-incomplete-seq': message.seq },
+      h('span', { class: 'incomplete-label' }, current ? '未完成' : '历史未完成记录'),
+      canRetry ? h('button', { type: 'button', class: 'btn small', 'data-retry-member': member, 'data-retry-gid': gid, 'data-retry-seq': message.seq,
+        hidden: !current,
+        disabled: !!memberAvailability(member).paused,
+        onclick: (event) => retryMember(gid, member, event.currentTarget) }, '补答此成员') : null,
+      canRetry ? h('button', { type: 'button', class: 'link-btn incomplete-status-button', hidden: !current, onclick: openGroupModels }, '查看成员状态') : null,
+      h('span', { class: 'incomplete-hint' }, current ? '补答只请求这位成员，读取最新共享上下文；不能恢复上次的内部推理。'
+        : pending ? '此成员有更新的未完成记录，请在最新记录补答。' : '此成员当前没有待补答任务；这条历史失败记录仍会保留。'),
+      canRetry ? h('span', { class: 'retry-pause-hint', 'data-retry-hint': member, hidden: !current || !memberAvailability(member).paused },
+        '此成员已暂停，请先恢复调用。') : null);
+  }
+
+  async function retryMember(gid, member, button) {
+    const pending = (S.state.incomplete_members || {})[member];
+    if (S.gid !== gid || !pending || Number(pending.seq) !== Number(button.dataset.retrySeq)) {
+      toast('待补答任务已变化，请查看此成员最新的未完成记录');
+      return;
+    }
+    button.dataset.busy = 'true';
+    button.disabled = true;
+    try {
+      await api('POST', '/api/groups/' + encodeURIComponent(gid) + '/retry/' + member, {});
+      toast('已安排 ' + NAMES[member] + ' 单独补答');
+      if (S.gid === gid) schedulePoll(200);
+    } catch (e) { toast(e.message, true); }
+    finally { delete button.dataset.busy; refreshRetryButtons(); }
+  }
+
+  function refreshRetryButtons() {
+    document.querySelectorAll('[data-incomplete-member]').forEach((node) => {
+      const member = node.dataset.incompleteMember;
+      const pending = (S.state.incomplete_members || {})[member];
+      const current = node.dataset.incompleteGid === S.gid && pending && Number(pending.seq) === Number(node.dataset.incompleteSeq);
+      const paused = !!memberAvailability(member).paused;
+      const button = node.querySelector('[data-retry-member]');
+      if (button) {
+        button.hidden = !current;
+        button.disabled = !!button.dataset.busy || paused;
+        button.title = paused ? '请先在模型设置中恢复此成员' : '只请求此成员补答，不自动调用其他成员';
+      }
+      node.querySelector('.incomplete-label').textContent = current ? '未完成' : '历史未完成记录';
+      node.querySelector('.incomplete-hint').textContent = current
+        ? '补答只请求这位成员，读取最新共享上下文；不能恢复上次的内部推理。'
+        : pending ? '此成员有更新的未完成记录，请在最新记录补答。' : '此成员当前没有待补答任务；这条历史失败记录仍会保留。';
+      const statusButton = node.querySelector('.incomplete-status-button');
+      if (statusButton) statusButton.hidden = !current;
+      const pauseHint = node.querySelector('[data-retry-hint]');
+      if (pauseHint) pauseHint.hidden = !current || !paused;
+    });
+  }
+
   function messageNode(m) {
-    if (m.kind === 'system') {
+    if (m.kind === 'system' || m.incomplete) {
       const isError = /没能回复|出错了/.test(m.text);
       return h('div', { class: 'msg sys' + (m.subtle ? ' subtle' : '') + (isError ? ' error' : ''), 'data-seq': m.seq },
-        h('span', { class: 'sys-text' }, m.text));
+        h('span', { class: 'sys-text' }, m.text), incompleteNode(m), modelRouteNode(m.model_route));
     }
     if (m.author === 'user') {
       return h('div', { class: 'msg user m-user' + (m.board_note ? ' note' : ''), 'data-seq': m.seq },
@@ -600,6 +697,8 @@
         h('time', {}, fmtDay(m.ts)),
         m.elapsed ? h('span', { class: 'took' }, '用时 ' + fmtSeconds(m.elapsed)) : null,
         h('button', { type: 'button', class: 'link-btn msg-memory', onclick: () => editMemory(null, m) }, '存入记忆')),
+      modelRouteNode(m.model_route),
+      incompleteNode(m),
       h('div', { class: 'msg-body md', html: md(m.text) }),
       m.effects && m.effects.length ? h('div', { class: 'effects', 'aria-label': '看板变化' }, m.effects.map(effectChip)) : null,
       m.status_note ? h('div', { class: 'status-note' }, m.status_note) : null);
@@ -653,7 +752,171 @@
   }
 
   // ------------------------------------------------------------ 顶栏
+  const availabilityBusy = new Set();
+  const availabilityEpoch = {};
+  const quotaBusy = new Set();
+  const PAUSE_REASONS = { quota: '额度限制', rate_limit: '调用频率限制', manual: '手动暂停' };
+
+  function availabilityEpochSnapshot() {
+    return Object.fromEntries(MEMBERS.map((member) => [member, availabilityEpoch[member] || 0]));
+  }
+
+  function acceptAvailability(values, snapshot) {
+    if (!values) return;
+    for (const member of MEMBERS) {
+      if (values[member] && (!snapshot || snapshot[member] === (availabilityEpoch[member] || 0))) S.modelAvailability[member] = values[member];
+    }
+  }
+
+  function acceptQuota(values) {
+    if (!values) return;
+    for (const member of MEMBERS) {
+      if (!values[member]) continue;
+      const existing = S.modelQuota[member];
+      if (existing && existing.checked_at && values[member].checked_at && values[member].checked_at < existing.checked_at) continue;
+      S.modelQuota[member] = values[member];
+    }
+  }
+
+  function restorePanelFocus(node, hadFocus) {
+    if (!hadFocus) return;
+    node.tabIndex = -1;
+    const target = node.querySelector('button:not(:disabled)') || node;
+    target.focus({ preventScroll: true });
+  }
+
+  function memberAvailability(member) {
+    return S.modelAvailability[member] || (S.members && S.members[member] && S.members[member].availability) || { paused: false };
+  }
+
+  function quotaPanel(member) {
+    const node = h('div', { class: 'member-quota', 'data-quota-member': member });
+    renderQuotaPanel(node);
+    return node;
+  }
+
+  function quotaPercent(value) {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
+      ? String(Math.round(value * 10) / 10) + '%' : '未知';
+  }
+
+  function quotaReset(value) {
+    if (value == null || value === '') return '未知';
+    const date = typeof value === 'number' ? new Date(value < 100000000000 ? value * 1000 : value) : new Date(value);
+    return Number.isNaN(date.getTime()) ? '未知' : date.toLocaleString();
+  }
+
+  function renderQuotaPanel(node) {
+    const member = node.dataset.quotaMember;
+    const quota = S.modelQuota[member];
+    const busy = quotaBusy.has(member);
+    const signature = JSON.stringify([quota, busy, !!S.info.demo]);
+    if (node.dataset.signature === signature) return;
+    const hadFocus = node.contains(document.activeElement);
+    node.dataset.signature = signature;
+    const details = [];
+    if (S.info.demo) details.push(h('p', { class: 'meta' }, '演示模式，不查询真实账号额度。'));
+    else if (!quota) details.push(h('p', { class: 'meta' }, '剩余额度未知，尚未查询官方信息。'));
+    else {
+      if (quota.status === 'available') {
+        const windows = Array.isArray(quota.windows) ? quota.windows : [];
+        if (!windows.length) details.push(h('p', { class: 'meta' }, '官方未返回额度窗口，剩余额度未知。'));
+        windows.forEach((window, index) => {
+          const used = quotaPercent(window.used_percent);
+          const remaining = quotaPercent(window.remaining_percent);
+          const minutes = window.window_minutes;
+          const duration = typeof minutes === 'number' && minutes > 0
+            ? ' · ' + (minutes % 60 === 0 ? minutes / 60 + ' 小时窗口' : minutes + ' 分钟窗口') : '';
+          details.push(h('div', { class: 'quota-window' },
+            h('div', { class: 'quota-window-head' }, h('strong', {}, window.label || '额度窗口 ' + (index + 1)),
+              duration ? h('span', { class: 'meta' }, duration) : null),
+            h('div', { class: 'quota-percentages' }, h('span', {}, '已用 ' + used), h('span', {}, '剩余 ' + remaining)),
+            used !== '未知' ? h('progress', { value: window.used_percent, max: 100, 'aria-label': (window.label || '额度窗口') + ' 已用比例' }) : null,
+            h('p', { class: 'meta' }, '重置时间：' + quotaReset(window.resets_at))));
+        });
+      } else details.push(h('p', { class: quota.status === 'error' ? 'quota-error' : 'meta' },
+        quota.status === 'error' ? '查询失败，剩余额度未知。' : '当前没有可安全读取的官方额度接口，剩余额度未知。'));
+      if (quota.message) details.push(h('p', { class: 'quota-message' }, quota.message));
+      if (quota.ordinary_usage_allowed === false) details.push(h('p', { class: 'quota-error' }, '官方返回：当前不允许常规调用。'));
+      details.push(h('p', { class: 'meta quota-source' },
+        '查询时间：' + (quota.checked_at ? quotaReset(quota.checked_at) : '未知') + ' · 来源：' + (quota.source || '未知')));
+    }
+    node.replaceChildren(h('div', { class: 'quota-head' }, h('strong', {}, '官方额度'),
+      h('button', { type: 'button', class: 'btn small', disabled: busy || !!S.info.demo,
+        'aria-label': NAMES[member] + ' 刷新官方额度', onclick: () => refreshQuota(member) }, busy ? '正在查询……' : '刷新官方额度')), ...details);
+    restorePanelFocus(node, hadFocus);
+  }
+
+  async function refreshQuota(member) {
+    if (quotaBusy.has(member) || S.info.demo) return;
+    quotaBusy.add(member);
+    refreshAvailabilityPanels();
+    try {
+      const data = await api('GET', '/api/members/' + member + '/quota?refresh=1');
+      acceptQuota({ [member]: data.quota });
+      await loadMembers(false);
+    } catch (e) {
+      S.modelQuota[member] = { status: 'error', message: e.message, windows: [], checked_at: Date.now() / 1000, source: '官方额度查询' };
+    } finally { quotaBusy.delete(member); refreshAvailabilityPanels(); }
+  }
+
+  function availabilityPanel(member) {
+    const node = h('div', { class: 'member-availability', 'data-availability-member': member });
+    renderAvailabilityPanel(node);
+    return node;
+  }
+
+  function renderAvailabilityPanel(node) {
+    const member = node.dataset.availabilityMember;
+    const availability = memberAvailability(member);
+    const busy = availabilityBusy.has(member);
+    const signature = JSON.stringify([availability.paused, availability.reason, availability.message, busy]);
+    if (node.dataset.signature === signature) return;
+    const hadFocus = node.contains(document.activeElement);
+    node.dataset.signature = signature;
+    node.classList.toggle('paused', !!availability.paused);
+    const label = availability.paused ? '已暂停 · ' + (PAUSE_REASONS[availability.reason] || '等待恢复') : '未暂停';
+    node.replaceChildren(...[
+      h('div', { class: 'availability-state' }, h('span', { class: 'availability-indicator', 'aria-hidden': 'true' }),
+        h('strong', {}, label),
+        h('button', { type: 'button', class: 'btn small', disabled: busy,
+          'aria-label': (availability.paused ? '恢复 ' : '暂停 ') + NAMES[member] + ' 调用',
+          onclick: () => changeAvailability(member, !availability.paused) },
+        busy ? '正在更新……' : availability.paused ? '恢复调用' : '暂停调用')),
+      availability.paused && availability.message ? h('p', { class: 'availability-message' }, availability.message) : null].filter(Boolean));
+    restorePanelFocus(node, hadFocus);
+  }
+
+  function refreshAvailabilityPanels() {
+    document.querySelectorAll('[data-availability-member]').forEach(renderAvailabilityPanel);
+    document.querySelectorAll('[data-quota-member]').forEach(renderQuotaPanel);
+    refreshRetryButtons();
+  }
+
+  async function changeAvailability(member, paused) {
+    if (availabilityBusy.has(member)) return;
+    availabilityBusy.add(member);
+    availabilityEpoch[member] = (availabilityEpoch[member] || 0) + 1;
+    refreshAvailabilityPanels();
+    try {
+      const data = await api('POST', '/api/members/' + member + (paused ? '/pause' : '/resume'), {});
+      availabilityEpoch[member]++;
+      const availability = data.availability || data;
+      if (typeof availability.paused === 'boolean') {
+        S.modelAvailability[member] = availability;
+        if (S.members && S.members[member]) S.members[member].availability = availability;
+      } else await loadMembers(true);
+      toast(NAMES[member] + (paused ? ' 已暂停后续调用，对所有群聊生效' : ' 已恢复，下一轮再尝试调用，对所有群聊生效'));
+      renderHeader();
+      renderBanner();
+      if (S.gid) schedulePoll(200);
+    } catch (e) { toast(e.message, true); }
+    finally { availabilityBusy.delete(member); refreshAvailabilityPanels(); }
+  }
+
   function memberIssue(m) {
+    const availability = memberAvailability(m);
+    if (availability.paused) return '已暂停（' + (PAUSE_REASONS[availability.reason] || '等待恢复') + '），可在模型设置中恢复后续调用';
     const det = S.members && S.members[m];
     if (!det || det.demo) return '';
     if (!det.installed) return '没有找到 ' + det.cli + '（命令 ' + det.command + '）';
@@ -662,6 +925,7 @@
   }
 
   function renderHeader() {
+    refreshAvailabilityPanels();
     const g = S.group;
     if (!g) return;
     $('#group-title').textContent = g.name;
@@ -673,11 +937,13 @@
     seats.replaceChildren(...MEMBERS.map((m) => {
       const inGroup = g.members.includes(m);
       const issue = memberIssue(m);
+      const paused = memberAvailability(m).paused;
       const b = h('button', {
-        type: 'button', class: 'seat m-' + m + (speaking.has(m) ? ' speaking' : ''),
+        type: 'button', class: 'seat m-' + m + (speaking.has(m) ? ' speaking' : '') + (paused ? ' paused' : ''),
         'aria-pressed': inGroup ? 'true' : 'false',
         title: (inGroup ? '点击让 ' + NAMES[m] + ' 退出本群' : '点击让 ' + NAMES[m] + ' 进群') + (issue ? '\n' + issue : ''),
-      }, NAMES[m], issue && inGroup ? h('span', { class: 'warn-dot', 'aria-label': '有问题' }) : null);
+      }, NAMES[m], paused ? h('span', { class: 'seat-paused' }, '暂停')
+        : issue && inGroup ? h('span', { class: 'warn-dot', 'aria-label': '有问题' }) : null);
       b.addEventListener('click', quiet(() => toggleSeat(m)));
       return b;
     }));
@@ -714,10 +980,14 @@
   }
 
   async function loadMembers(refresh) {
+    const availabilitySnapshot = availabilityEpochSnapshot();
     try {
       const d = await api('GET', '/api/members' + (refresh ? '?refresh=1' : ''));
       S.members = {};
-      d.members.forEach((m) => { S.members[m.id] = m; });
+      d.members.forEach((m) => {
+        S.members[m.id] = m;
+        if (m.availability) acceptAvailability({ [m.id]: m.availability }, availabilitySnapshot);
+      });
       renderBanner();
       renderHeader();
     } catch (e) { /* 忽略 */ }
@@ -1138,14 +1408,17 @@
   }
 
   async function patchGroup(changes, message) {
+    const gid = S.gid;
     try {
-      const d = await api('PATCH', '/api/groups/' + S.gid, changes);
-      S.group = d.group;
-      renderHeader();
-      renderBanner();
+      const d = await api('PATCH', '/api/groups/' + gid, changes);
+      if (S.gid === gid) {
+        S.group = d.group;
+        renderHeader();
+        renderBanner();
+        schedulePoll(200);
+      }
       if (message) toast(message);
       refreshGroups();
-      schedulePoll(200);
     } catch (e) {
       toast(e.message, true);
       throw e;
@@ -1176,6 +1449,103 @@
     } catch (e) { toast(e.message, true); }
   }
 
+  function cleanModelInput(value, label) {
+    const model = value.trim();
+    if (model && (model.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9_.:/@+\-]*(?:\[[1-9][0-9]*[kKmM]\])?$/.test(model))) {
+      throw new Error(label + ' 应为不含空白、长度不超过 200 的模型 ID 或别名');
+    }
+    return model;
+  }
+
+  function groupModelFields(group) {
+    const controls = {};
+    const rows = MEMBERS.map((member) => {
+      const current = (group.model_overrides || {})[member] || {};
+      const mode = select([['inherit', '沿用成员设置'], ['auto', '自动选择档位'], ['manual', '手动指定模型']], current.mode || 'inherit');
+      const model = textInput(current.model || '', '留空使用 CLI 默认模型');
+      model.maxLength = 200;
+      const modelField = field(NAMES[member] + ' 指定模型', model);
+      const hint = h('p', { class: 'meta' });
+      const sync = () => {
+        modelField.hidden = mode.value !== 'manual';
+        hint.textContent = mode.value === 'auto'
+          ? '使用“成员与连接”中的三个模型档位；三个模型 ID 均须已配置。'
+          : mode.value === 'manual' ? '本群指定优先于成员设置。留空时明确使用 CLI 默认模型。'
+            : '本群跟随“成员与连接”中的选择方式和模型。';
+      };
+      mode.addEventListener('change', sync);
+      sync();
+      controls[member] = { mode, model };
+      return h('div', { class: 'group-model-row m-' + member },
+        h('div', { class: 'row' }, field(NAMES[member] + ' 模型策略', mode), modelField), hint,
+        availabilityPanel(member), quotaPanel(member));
+    });
+    return {
+      node: h('div', { class: 'group-model-fields' },
+        h('p', { class: 'model-setting-note' }, '本群指定优先于成员设置。修改从下一轮开始生效。'), rows,
+        h('p', { class: 'model-setting-note' }, '暂停和恢复影响所有群聊。暂停后其余成员可继续，该成员仍在群中，不会被算作同意。恢复后下一轮再尝试，不立即调用模型。'),
+        h('p', { class: 'meta' }, '同一账号的模型可能共用额度，切换模型不保证恢复额度。')),
+      value: () => {
+        const result = {};
+        for (const member of MEMBERS) {
+          const control = controls[member];
+          if (control.mode.value !== 'inherit') result[member] = {
+            mode: control.mode.value, model: control.mode.value === 'manual' ? cleanModelInput(control.model.value, NAMES[member] + ' 指定模型') : '',
+          };
+        }
+        return result;
+      },
+    };
+  }
+
+  function openGroupModels() {
+    if (!S.group) return;
+    const gid = S.gid;
+    const controls = groupModelFields(S.group);
+    const query = textarea($('#input').value || '', '输入一段准备讨论的问题，预览三家会选择哪个模型。', 3);
+    query.maxLength = 12000;
+    query.setAttribute('aria-label', '模型预览问题');
+    const result = h('div', { class: 'model-preview-result', 'aria-live': 'polite' });
+    const previewButton = h('button', { type: 'button', class: 'btn small' }, '预览已保存配置');
+    let previewRequest = 0;
+    const body = h('div', {}, controls.node,
+      h('p', { class: 'model-setting-note' }, '自动选择只使用本地规则判断任务复杂度，不额外调用模型。模型 ID 必须受你的账号支持，节省额度并不保证。'),
+      h('section', { class: 'model-preview' },
+        h('h3', {}, '发送前预览'),
+        h('p', { class: 'meta' }, '预览使用已保存配置，以上未保存的修改不会参与。预览本身不消耗模型额度。'),
+        query, previewButton, result));
+    const modal = openModal({ title: '本群模型', body, wide: true, actions: [
+      { label: '关闭' },
+      { label: '保存本群设置', primary: true, onClick: async () => {
+        if (gid !== S.gid) throw new Error('当前群聊已改变，请重新打开模型设置');
+        await patchGroup({ model_overrides: controls.value() }, '模型设置已保存，从下一轮生效');
+      } },
+    ] });
+    previewButton.addEventListener('click', async () => {
+      const request = ++previewRequest;
+      previewButton.disabled = true;
+      result.replaceChildren(h('p', { class: 'meta' }, '正在计算选择结果……'));
+      try {
+        const data = await api('POST', '/api/groups/' + encodeURIComponent(gid) + '/model-preview', { text: query.value.trim(), task: 'reply' });
+        if (!modal.isConnected || request !== previewRequest) return;
+        const providers = MEMBERS.filter((member) => (data.routes || {})[member] || (data.errors || {})[member]);
+        result.replaceChildren(...providers.map((member) => h('article', { class: 'model-preview-card m-' + member },
+          h('strong', { class: 'who' }, NAMES[member]),
+          (data.errors || {})[member]
+            ? h('p', { class: 'modal-error', role: 'alert' }, data.errors[member])
+            : modelRouteNode(data.routes[member], true))));
+        if (!providers.length) result.append(h('p', { class: 'meta' }, '暂无参与预览的成员，请先在群里开启至少一位。'));
+      } catch (e) {
+        if (modal.isConnected && request === previewRequest) result.replaceChildren(h('p', { class: 'modal-error', role: 'alert' }, e.message));
+      } finally { if (request === previewRequest) previewButton.disabled = false; }
+    });
+    query.addEventListener('input', () => {
+      previewRequest++;
+      previewButton.disabled = false;
+      result.replaceChildren(h('p', { class: 'meta' }, '问题已改变，请重新预览。'));
+    });
+  }
+
   function openGroupSettings() {
     const g = S.group;
     const name = textInput(g.name);
@@ -1188,6 +1558,7 @@
     const lang = textInput(g.language || '简体中文');
     const project = projectPicker(g.project_id || g.id, g.name,
       S.hasChat ? '已有聊天记录，请新建群聊并选择该项目。' : S.state.running ? '讨论进行中，暂时不能切换项目。' : '');
+    const modelFields = groupModelFields(g);
     openModal({
       title: '群设置',
       body: [
@@ -1202,6 +1573,7 @@
         h('div', { class: 'row' },
           field('书记员', sec, '负责把较早的讨论整理成前情摘要。'),
           field('讨论语言', lang)),
+        h('details', { class: 'advanced group-model-settings' }, h('summary', {}, '本群模型选择'), modelFields.node),
       ],
       actions: [{ label: '取消' }, {
         label: '保存', primary: true,
@@ -1209,6 +1581,7 @@
           name: name.value, members: seats.value(), mode: mode.value(), parallel_review: review.input.checked,
           auto_rounds: Number(auto.value), reply_length: length.value, secretary: sec.value, language: lang.value,
           project_id: await project.value(),
+          model_overrides: modelFields.value(),
         }, '群设置已保存'),
       }],
     });
@@ -1258,6 +1631,7 @@
       });
     }
     openMenu(e.currentTarget, items.concat([
+      { label: '本群模型', onClick: openGroupModels },
       { label: '共享记忆', onClick: openMemories },
       { label: '群设置', onClick: openGroupSettings },
       { label: '导出聊天记录和看板', onClick: exportGroup },
@@ -1620,13 +1994,19 @@
       };
       for (const m of MEMBERS) {
         const f = forms[m];
+        const profiles = {};
+        for (const tier of ['fast', 'balanced', 'deep']) profiles[tier] = cleanModelInput(f.profiles[tier].value, NAMES[m] + ' ' + MODEL_TIERS[tier]);
+        if (f.routingMode.value === 'auto' && Object.values(profiles).some((model) => !model)) {
+          throw new Error(NAMES[m] + ' 自动模式需要填写快速、均衡、深入三个模型 ID');
+        }
         payload.members[m] = {
-          command: f.command.value.trim(), model: f.model.value.trim(), extra_args: f.extra.value.trim(),
+          command: f.command.value.trim(), model: cleanModelInput(f.model.value, NAMES[m] + ' 手动模型'), extra_args: f.extra.value.trim(),
           timeout: Number(f.timeout.value) || 600, web: f.web ? f.web.input.checked : true,
+          routing: { mode: f.routingMode.value, profiles },
         };
       }
       await api('PUT', '/api/settings', payload);
-      if (!quiet) toast('已保存');
+      if (!quiet) toast('已保存，模型选择从下一轮生效');
       loadMembers(true);
     }
 
@@ -1637,6 +2017,7 @@
 
     let settings;
     let det;
+    const availabilitySnapshot = availabilityEpochSnapshot();
     try {
       [settings, det] = await Promise.all([api('GET', '/api/settings'), api('GET', '/api/members?refresh=1')]);
     } catch (e) {
@@ -1644,7 +2025,10 @@
       return;
     }
     S.members = {};
-    det.members.forEach((m) => { S.members[m.id] = m; });
+    det.members.forEach((m) => {
+      S.members[m.id] = m;
+      if (m.availability) acceptAvailability({ [m.id]: m.availability }, availabilitySnapshot);
+    });
     renderBanner();
     renderHeader();
 
@@ -1674,10 +2058,30 @@
       const f = {
         command: textInput(conf.command, '留空自动查找 ' + info.command),
         model: textInput(conf.model, '留空用默认模型'),
+        routingMode: select([['manual', '手动指定'], ['auto', '自动选择档位']], (conf.routing || {}).mode || 'manual'),
+        profiles: {},
         extra: textInput(conf.extra_args, '一般不用填'),
         timeout: h('input', { type: 'number', min: '30', max: '3600', step: '30' }),
         web: WEB_LABEL[m] ? check(WEB_LABEL[m], conf.web) : null,
       };
+      f.model.maxLength = 200;
+      const tierFields = ['fast', 'balanced', 'deep'].map((tier) => {
+        const input = textInput(((conf.routing || {}).profiles || {})[tier] || '', '填写账号可用的模型 ID');
+        input.maxLength = 200;
+        f.profiles[tier] = input;
+        return field(NAMES[m] + ' · ' + MODEL_TIERS[tier], input);
+      });
+      const manualField = field(NAMES[m] + ' 手动模型', f.model, '留空时使用 CLI 默认模型。');
+      const profiles = h('details', { class: 'model-profile-details' },
+        h('summary', {}, '自动模式的三个模型档位'),
+        h('div', { class: 'model-profiles' }, tierFields),
+        h('p', { class: 'meta' }, '三个档位均须填写模型 ID。各群选择自动模式时，也使用这里的档位。'));
+      const syncRouting = () => {
+        manualField.hidden = f.routingMode.value === 'auto';
+        profiles.open = f.routingMode.value === 'auto';
+      };
+      f.routingMode.addEventListener('change', syncRouting);
+      syncRouting();
       f.timeout.value = conf.timeout;
       forms[m] = f;
       const result = h('span', { class: 'ping-result', role: 'status' });
@@ -1688,6 +2092,7 @@
         result.textContent = '正在测试，可能要几十秒……';
         try {
           await save(true);
+          availabilityEpoch[m] = (availabilityEpoch[m] || 0) + 1;
           const r = await api('POST', '/api/members/' + m + '/ping', {});
           result.className = 'ping-result ' + (r.ok ? 'ok' : 'bad');
           result.textContent = r.ok ? '✓ 回复：' + r.reply + '（用时 ' + r.elapsed + ' 秒）' : '✗ ' + r.error;
@@ -1695,20 +2100,26 @@
           result.className = 'ping-result bad';
           result.textContent = '✗ ' + e.message;
         } finally {
+          availabilityEpoch[m] = (availabilityEpoch[m] || 0) + 1;
+          await loadMembers(false);
           pingBtn.disabled = false;
         }
       });
       nodes.push(h('section', { class: 'member-card m-' + m },
         h('h3', {}, NAMES[m], h('small', {}, info.cli)),
         h('div', { class: 'member-status' }, statusLines),
+        availabilityPanel(m),
+        quotaPanel(m),
         hint,
-        h('div', { class: 'row' }, field('命令路径（可选）', f.command), field('模型（可选）', f.model)),
+        field('命令路径（可选）', f.command),
+        h('div', { class: 'member-routing' },
+          h('div', { class: 'row' }, field(NAMES[m] + ' 模型选择', f.routingMode), manualField), profiles),
         h('div', { class: 'row' }, field('超时（秒）', f.timeout), field('附加参数（可选）', f.extra)),
         f.web ? f.web.node : null,
         h('div', {}, pingBtn, result)));
     }
 
-    globalOnly = check('只用会员额度：调用时忽略 ANTHROPIC_API_KEY、OPENAI_API_KEY、GEMINI_API_KEY、ANTIGRAVITY_API_KEY 等环境变量（推荐）', settings.membership_only !== false);
+    globalOnly = check('优先使用已登录账号，检查已知 API 路由（推荐）', settings.membership_only !== false);
     advWindow = h('input', { type: 'number', min: '4', max: '60' });
     advWindow.value = settings.recent_window;
     advBatch = h('input', { type: 'number', min: '2', max: '40' });
@@ -1716,6 +2127,9 @@
     nodes.push(h('section', { class: 'member-card' },
       h('h3', {}, '通用'),
       globalOnly.node,
+      h('p', { class: 'meta' }, 'Gemini 的计费方式仍需在官方客户端确认。'),
+      h('p', { class: 'model-setting-note' }, '暂停和恢复影响所有群聊，恢复后下一轮再尝试。同一账号可能共用额度，切换模型不保证恢复额度。'),
+      h('p', { class: 'model-setting-note' }, '自动选择使用本地规则判断任务复杂度，不额外调用模型。模型 ID 必须受你的账号支持，节省额度并不保证。修改从下一轮开始生效，本群指定优先。'),
       h('details', { class: 'advanced' }, h('summary', {}, '记忆设置'),
         h('div', { class: 'row' },
           field('原样附上的最近消息条数', advWindow, '更早的内容由书记员压缩成前情摘要。'),
@@ -1741,6 +2155,7 @@
     $('#btn-settings').addEventListener('click', openSettings);
     $('#btn-settings-2').addEventListener('click', openSettings);
     $('#btn-memory').addEventListener('click', openMemories);
+    $('#btn-models').addEventListener('click', openGroupModels);
     $('#btn-memory-side').addEventListener('click', openMemories);
     $('#btn-continue').addEventListener('click', continueDiscussion);
     $('#btn-stop').addEventListener('click', stopRound);

@@ -533,6 +533,61 @@ details.advanced > summary { cursor: pointer; color: var(--ink-2); font-size: 13
 .modal-foot { flex-wrap: wrap; }
 .modal-error:not(:empty) { flex: 1 1 100%; }
 
+/* ---------- 模型选择与运行记录 ---------- */
+.model-route { margin: 4px 0 10px; color: var(--ink-2); font-size: 12px; text-align: left; overflow-wrap: anywhere; }
+.model-route > summary { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; width: fit-content; max-width: 100%; cursor: pointer; list-style: none; }
+.model-route > summary::-webkit-details-marker { display: none; }
+.model-route > summary::before { content: '▸'; color: var(--ink-3); }
+.model-route[open] > summary::before { content: '▾'; }
+.route-requested { color: var(--ink-2); overflow-wrap: anywhere; }
+.route-expand { color: var(--ink-3); text-decoration: underline dotted; }
+.route-badge { padding: 0 5px; border-radius: 4px; background: var(--warn-bg); color: var(--warn-ink); }
+.model-route dl { display: grid; grid-template-columns: minmax(76px, auto) minmax(0, 1fr); gap: 4px 12px; margin: 7px 0 0; padding: 10px 12px; background: var(--sheet-2); border-radius: var(--r-ctl); }
+.model-route dt { color: var(--ink-3); }
+.model-route dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.sys .model-route { max-width: 92%; margin: 8px auto; }
+.model-setting-note { margin: 6px 0 12px; font-size: 13px; color: var(--ink-2); line-height: 1.75; }
+.group-model-row { padding: 10px 0; border-bottom: 1px solid var(--rule-2); }
+.group-model-row:last-child { border-bottom: 0; }
+.group-model-row .field { margin-bottom: 5px; }
+.group-model-row > .meta { margin: 2px 0; }
+.group-model-row .row > .field:first-child { flex: 0 1 190px; }
+.member-routing { padding: 12px; margin: 8px 0 12px; background: var(--sheet-2); border: 1px solid var(--rule-2); border-radius: var(--r-ctl); }
+.member-routing .field { margin-bottom: 8px; }
+.model-profile-details > summary { cursor: pointer; font-size: 13px; color: var(--ink-2); padding: 3px 0; }
+.model-profiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding-top: 10px; }
+.model-preview { border-top: 1px solid var(--rule); padding-top: 12px; margin-top: 16px; }
+.model-preview h3 { margin: 0; font-size: 15px; }
+.model-preview > textarea { margin-bottom: 8px; }
+.model-preview-result { margin-top: 12px; }
+.model-preview-card { padding: 10px 12px; border: 1px solid var(--rule); border-radius: var(--r-ctl); margin-top: 8px; }
+.model-preview-card > .who { color: var(--seat); font-size: 13px; }
+.model-preview-card .model-route { margin-bottom: 0; }
+.member-availability { padding: 8px 10px; margin: 8px 0 12px; border: 1px solid var(--rule-2); border-radius: var(--r-ctl); background: var(--sheet); font-size: 12px; }
+.member-availability.paused { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn-ink) 30%, var(--rule)); color: var(--warn-ink); }
+.availability-state { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+.availability-state .btn { margin-left: auto; }
+.availability-indicator { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); }
+.member-availability.paused .availability-indicator { background: var(--warn-ink); }
+.availability-message { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+.seat.paused { border-style: dashed; }
+.seat-paused { color: var(--warn-ink); background: var(--warn-bg); border-radius: 4px; font-size: 10px; padding: 0 4px; }
+.member-quota { border: 1px solid var(--rule-2); border-radius: var(--r-ctl); padding: 10px; margin: 8px 0 12px; background: var(--sheet); font-size: 12px; }
+.quota-head, .quota-window-head, .quota-percentages { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.quota-head .btn { margin-left: auto; }
+.member-quota p { margin: 6px 0 0; }
+.quota-message, .quota-source { overflow-wrap: anywhere; white-space: pre-wrap; }
+.quota-message { color: var(--ink-2); }
+.quota-error { color: var(--seal); }
+.quota-window { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--rule-2); }
+.quota-percentages { justify-content: space-between; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.quota-window progress { display: block; width: 100%; height: 6px; margin-top: 6px; accent-color: var(--seat, var(--focus)); }
+.incomplete-reply { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 12px; margin: 8px 0; border: 1px solid var(--rule); border-radius: var(--r-ctl); text-align: left; font-size: 12px; }
+.incomplete-label { padding: 1px 6px; color: var(--seal); background: color-mix(in srgb, var(--seal) 9%, var(--sheet)); border-radius: 4px; }
+.incomplete-hint, .retry-pause-hint { flex: 1 1 100%; color: var(--ink-2); }
+.retry-pause-hint { color: var(--warn-ink); }
+.msg.sys .incomplete-reply { max-width: 92%; margin: 8px auto; }
+
 .scrim { display: none; }
 
 /* ---------- 动画 ---------- */
@@ -600,4 +655,9 @@ details.advanced > summary { cursor: pointer; color: var(--ink-2); font-size: 13
   .memory-meta time { margin-left: 0; }
   .modal-foot { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
   .modal-foot .btn { flex: 1; padding: 0 10px; }
+  .model-profiles { grid-template-columns: 1fr; gap: 2px; }
+  .group-model-row .row > .field:first-child { flex: 1 1 140px; }
+  .model-route dl { grid-template-columns: 1fr; gap: 2px; }
+  .model-route dd { margin-bottom: 6px; }
+  .head-actions #btn-models, .head-actions #btn-memory { padding: 0 9px; }
 }

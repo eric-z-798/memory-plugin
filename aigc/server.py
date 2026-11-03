@@ -43,6 +43,9 @@ ROUTES = [
     ("GET", r"/api/info", "info"),
     ("GET", r"/api/members", "members"),
     ("POST", r"/api/members/(claude|gpt|gemini)/ping", "ping"),
+    ("POST", r"/api/members/(claude|gpt|gemini)/pause", "pause_member"),
+    ("POST", r"/api/members/(claude|gpt|gemini)/resume", "resume_member"),
+    ("GET", r"/api/members/(claude|gpt|gemini)/quota", "member_quota"),
     ("GET", r"/api/settings", "get_settings"),
     ("PUT", r"/api/settings", "put_settings"),
     ("GET", r"/api/projects", "projects"),
@@ -55,6 +58,8 @@ ROUTES = [
     ("DELETE", r"/api/groups/(g-[a-z0-9]{6,32})", "delete_group"),
     ("GET", r"/api/groups/(g-[a-z0-9]{6,32})/poll", "poll"),
     ("POST", r"/api/groups/(g-[a-z0-9]{6,32})/messages", "post_message"),
+    ("POST", r"/api/groups/(g-[a-z0-9]{6,32})/model-preview", "model_preview"),
+    ("POST", r"/api/groups/(g-[a-z0-9]{6,32})/retry/(claude|gpt|gemini)", "retry_member"),
     ("POST", r"/api/groups/(g-[a-z0-9]{6,32})/continue", "continue_discussion"),
     ("POST", r"/api/groups/(g-[a-z0-9]{6,32})/stop", "stop"),
     ("POST", r"/api/groups/(g-[a-z0-9]{6,32})/board", "board"),
@@ -138,6 +143,15 @@ def export_markdown(group: dict, board: dict, messages: list) -> str:
             lines += ["> 系统（%s）：%s" % (stamp, m.get("text", "")), ""]
         else:
             lines += ["### #%s %s · %s" % (m.get("seq"), name_of(m.get("author", "")), stamp), "", m.get("text", ""), ""]
+        route = m.get("model_route")
+        if route:
+            lines += ["> 模型选择：%s / %s；请求：%s；%s" % (
+                route.get("mode", ""), route.get("tier", ""), route.get("requested_model") or "CLI 默认",
+                route.get("reason", ""))]
+            reported = route.get("reported_models") or ([route["reported_model"]] if route.get("reported_model") else [])
+            label = "CLI 配置回显" if route.get("report_kind") == "configuration" else "CLI 报告使用模型（可能多模型）"
+            lines += ["> " + ("模拟调用" if route.get("simulation") else
+                       (label + "：" + "、".join(reported) if reported else "CLI 未报告实际模型")), ""]
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -315,13 +329,31 @@ class Handler(BaseHTTPRequestHandler):
     def api_members(self, body):
         settings = self.app.store.load_settings()
         found = self.app.registry.detect(settings, refresh=self._query().get("refresh") == "1")
-        self.send_json(200, {"members": [found[m] for m in MEMBER_ORDER]})
+        availability = self.app.engine.availability.snapshot()
+        self.send_json(200, {"members": [dict(found[m], availability=availability[m]) for m in MEMBER_ORDER]})
+
+    def api_pause_member(self, member, body):
+        state = self.app.engine.availability.pause(member, "manual", "主持人已暂停此成员的新调用，适用于所有群聊。")
+        self.send_json(200, {"availability": state})
+
+    def api_resume_member(self, member, body):
+        self.send_json(200, {"availability": self.app.engine.availability.resume(member)})
+
+    def api_member_quota(self, member, body):
+        quota = self.app.engine.quota.get(member, self.app.store.load_settings(), refresh=self._query().get("refresh") == "1")
+        self.send_json(200, {"quota": quota})
 
     def api_ping(self, member, body):
+        if self.app.engine.availability.snapshot()[member]["paused"]:
+            self.send_json(200, {"ok": False, "error": "此成员已暂停，请先恢复成员再测试连通。"})
+            return
         settings = self.app.store.load_settings()
         cwd = self.app.store.root / "ping-workspace"
         cwd.mkdir(parents=True, exist_ok=True)
-        self.send_json(200, self.app.registry.ping(member, settings, cwd))
+        result = self.app.registry.ping(member, settings, cwd)
+        if not result.get("ok"):
+            self.app.engine.record_member_failure(member, result.get("error", ""))
+        self.send_json(200, result)
 
     def api_get_settings(self, body):
         self.send_json(200, self.app.store.load_settings())
@@ -397,6 +429,19 @@ class Handler(BaseHTTPRequestHandler):
             raise HttpError(400, "消息太长了（最多 %d 字）" % MAX_MESSAGE)
         msg = self.app.engine.post_user_message(gid, text)
         self.send_json(201, {"message": msg})
+
+    def api_model_preview(self, gid, body):
+        self._need_group(gid)
+        text = body.get("text", "")
+        task = body.get("task", "reply")
+        if not isinstance(text, str) or len(text) > MAX_MESSAGE or not isinstance(task, str):
+            raise HttpError(400, "预览参数不合法或消息太长")
+        self.send_json(200, self.app.engine.model_preview(gid, text, task))
+
+    def api_retry_member(self, gid, member, body):
+        self._need_group(gid)
+        self.app.engine.retry_member(gid, member)
+        self.send_json(200, {"ok": True})
 
     def api_continue_discussion(self, gid, body):
         self._need_group(gid)

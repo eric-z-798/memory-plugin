@@ -25,6 +25,7 @@ from typing import Dict, List, Optional
 from . import board as board_mod
 from .common import MEMBER_ORDER, atomic_write_json, name_of, now, read_json, valid_gid
 from .memory import MemoryStore
+from .routing import default_routing, clean_routing, resolve_route
 
 DEFAULT_SETTINGS = {
     "members": {
@@ -39,6 +40,8 @@ DEFAULT_SETTINGS = {
     # 调用时忽略 ANTHROPIC_API_KEY 等环境变量，保证只用会员额度
     "membership_only": True,
 }
+for _member in MEMBER_ORDER:
+    DEFAULT_SETTINGS["members"][_member]["routing"] = default_routing(_member)
 
 class StoreError(Exception):
     pass
@@ -83,6 +86,8 @@ class Store:
             if not isinstance(conf, dict):
                 continue
             target = clean["members"][mid]
+            if "routing" in conf:
+                target["routing"] = clean_routing(mid, conf["routing"])
             for field in ("command", "model", "extra_args"):
                 if field in conf:
                     target[field] = str(conf[field] or "").strip()
@@ -101,6 +106,8 @@ class Store:
                     pass
         if "membership_only" in settings:
             clean["membership_only"] = bool(settings["membership_only"])
+        for mid in MEMBER_ORDER:
+            resolve_route(mid, clean, {}, "reply", "")
         atomic_write_json(self.root / "settings.json", clean)
         return clean
 
@@ -147,6 +154,7 @@ class Store:
             "auto_rounds": 2,
             "round_counter": 0,
             "secretary_index": 0,
+            "model_overrides": {},
         }
         self.memory.ensure_project(group["project_id"], group["name"])
         gdir = self.groups_dir / gid
@@ -166,6 +174,7 @@ class Store:
         if not group:
             raise StoreError("找不到这个群")
         group.setdefault("project_id", gid)
+        group.setdefault("model_overrides", {})
         self.memory.ensure_project(group["project_id"], group.get("name", "项目"))
         return group
 

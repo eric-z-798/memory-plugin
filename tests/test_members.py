@@ -247,10 +247,6 @@ class CliTest(unittest.TestCase):
         self.assertEqual(r["reply"], "收到")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WindowsPathTest(unittest.TestCase):
     """在任何系统上模拟 Windows，检查"刚装好的命令行也能找到"的逻辑。"""
 
@@ -347,3 +343,189 @@ class DemoMemoryTest(unittest.TestCase):
         record["status"] = "pending"
         reply = DemoMember("gpt", 0)._reply("## 共享长期记忆（本轮快照）\n%s\n## 共享看板\n" % json.dumps(record))
         self.assertNotIn("预算为3万", reply)
+
+
+class ModelMetadataTest(unittest.TestCase):
+    """Fixture-level CLI envelopes distinguish configured models from usage."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="aigc-model-report-")
+        self.addCleanup(self.tmp.cleanup)
+        self.cwd = Path(self.tmp.name)
+        self.settings = copy.deepcopy(DEFAULT_SETTINGS)
+        self.settings["membership_only"] = False
+
+    def adapter(self, member):
+        return CliMember(member, self.settings)
+
+    def ask_with_output(self, adapter, output, code=0):
+        from unittest import mock
+        with mock.patch.object(adapter, "_command", return_value="fixture-cli"), \
+                mock.patch("aigc.members.run_process", return_value=(code, output, "")):
+            return adapter.ask("fixture prompt", self.cwd)
+
+    def claude_output(self, usage=None):
+        data = {"result": "fixture reply", "is_error": False, "subtype": "success"}
+        if usage is not None:
+            data["modelUsage"] = usage
+        return json.dumps(data)
+
+    def agy_output(self, model=None, status="SUCCESS"):
+        init = {"event": "init", "init": {"model": model}}
+        result = {"event": "result", "result": {"status": status, "response": "fixture reply"}}
+        return json.dumps(init) + "\n" + json.dumps(result)
+
+    def test_claude_reports_multiple_usage_models_without_selecting_final_model(self):
+        adapter = self.adapter("claude")
+        self.ask_with_output(adapter, self.claude_output({"claude-opus-4-6": {}, "claude-haiku-4-5": {}}))
+        self.assertEqual(adapter.last_metadata, {
+            "reported_models": ["claude-opus-4-6", "claude-haiku-4-5"], "report_kind": "usage"})
+        self.assertNotIn("reported_model", adapter.last_metadata)
+
+    def test_claude_single_usage_model_and_missing_report(self):
+        adapter = self.adapter("claude")
+        self.ask_with_output(adapter, self.claude_output({"claude-opus-4-6[1m]": {}}))
+        self.assertEqual(adapter.last_metadata, {"reported_model": "claude-opus-4-6[1m]", "report_kind": "usage"})
+        self.ask_with_output(adapter, self.claude_output())
+        self.assertEqual(adapter.last_metadata, {}, "前一次的报告不能泄漏到下一次调用")
+
+    def test_agy_init_model_is_configuration_only(self):
+        adapter = self.adapter("gemini")
+        self.ask_with_output(adapter, self.agy_output("gemini-3.8-flash-medium"))
+        self.assertEqual(adapter.last_metadata, {
+            "reported_model": "gemini-3.8-flash-medium", "report_kind": "configuration"})
+
+    def test_agy_no_init_model_does_not_invent_report(self):
+        self.settings["members"]["gemini"]["model"] = "requested-model"
+        adapter = self.adapter("gemini")
+        self.ask_with_output(adapter, self.agy_output())
+        self.assertEqual(adapter.last_metadata, {})
+
+    def test_codex_configured_model_is_not_an_observed_report(self):
+        self.settings["members"]["gpt"]["model"] = "requested-model"
+        adapter = self.adapter("gpt")
+        self.ask_with_output(adapter, "fixture reply")
+        self.assertEqual(adapter.last_metadata, {})
+
+    def test_bad_model_metadata_is_ignored(self):
+        for value in ({"name": "injected"}, ["a"], 42, "", "bad\nmodel", "<script>", "x" * 201):
+            adapter = self.adapter("gemini")
+            with self.subTest(value=value):
+                self.ask_with_output(adapter, self.agy_output(value))
+                self.assertEqual(adapter.last_metadata, {})
+        adapter = self.adapter("claude")
+        self.ask_with_output(adapter, self.claude_output({"bad\nmodel": {}, "<script>": {}}))
+        self.assertEqual(adapter.last_metadata, {})
+
+    def test_failure_clears_previous_report(self):
+        adapter = self.adapter("claude")
+        self.ask_with_output(adapter, self.claude_output({"claude-sonnet": {}}))
+        with self.assertRaises(MemberError):
+            self.ask_with_output(adapter, self.claude_output({"claude-opus": {}}), code=1)
+        self.assertEqual(adapter.last_metadata, {})
+        adapter = self.adapter("gemini")
+        with self.assertRaises(MemberError):
+            self.ask_with_output(adapter, self.agy_output("configured-model", status="TIMEOUT"))
+        self.assertEqual(adapter.last_metadata, {})
+
+    def test_demo_identifies_simulation_without_fabricated_model(self):
+        from aigc.members import DemoMember
+        adapter = DemoMember("claude", delay=0)
+        self.assertEqual(adapter.last_metadata, {"simulation": True})
+        adapter.last_metadata["reported_model"] = "stale"
+        adapter.ask("这是连通测试", self.cwd)
+        self.assertEqual(adapter.last_metadata, {"simulation": True})
+
+
+class FailureClassificationTest(unittest.TestCase):
+    def test_explicit_quota_failures(self):
+        from aigc.members import classify_cli_failure
+        messages = [
+            "quota exhausted", "Quota exceeded for this account", "quota has been exhausted",
+            "You exceeded your current quota, please check your plan", "insufficient_quota",
+            "Claude AI usage limit reached|1760000000", "usage limit exceeded",
+            "You've hit your limit. Try again later", "You've hit your usage limit",
+            "You’ve hit your weekly limit", "no remainingquota", "no remaining quota",
+            "no quota remaining", "额度已用尽", "额度用完", "已经超过额度",
+            'Command failed (exit 1): {"error":{"code":"insufficient_quota"}}',
+            "HTTP 429: quota exceeded",
+        ]
+        for message in messages:
+            with self.subTest(message=message):
+                self.assertEqual(classify_cli_failure(message), "quota")
+
+    def test_explicit_rate_limits(self):
+        from aigc.members import classify_cli_failure
+        messages = [
+            "rate_limit_error", "rate limit exceeded", "Rate limit reached",
+            "RATE_LIMIT_EXCEEDED", "too many requests", "HTTP 429", "HTTP/1.1 429",
+            "HTTP error 429", "status429", "status code: 429", 'status_code=429',
+            '{"status":429,"message":"retry later"}', "Command failed: HTTP 429",
+            "请求过于频繁", "请求被限流",
+        ]
+        for message in messages:
+            with self.subTest(message=message):
+                self.assertEqual(classify_cli_failure(message), "rate_limit")
+
+    def test_non_limit_failures_and_monthly_notices_are_not_classified(self):
+        from aigc.members import classify_cli_failure, explain
+        messages = [
+            "quota", "limit", "rate limit", "usage limit", "quota settings not found",
+            "Monthly quota notice: 300 requests remaining", "Your monthly quota resets tomorrow",
+            "Configuration error: rate limit must be a positive integer", "model-429 is unknown",
+            "port 429 unavailable", "请求超时", "超过 30 秒还没完成，已停止。",
+            "Authentication required", "401 Unauthorized", "login expired", "API Key not configured",
+            "File size limit reached", "Context window limit reached", "每月额度为1000次",
+        ]
+        for message in messages:
+            with self.subTest(message=message):
+                self.assertEqual(classify_cli_failure(message), "")
+                self.assertEqual(classify_cli_failure(explain(message, "gpt")), "",
+                                 "错误翻译不能制造额度耗尽前缀")
+        self.assertEqual(classify_cli_failure(None), "")
+        self.assertEqual(classify_cli_failure({"quota": "exhausted"}), "")
+
+    def test_quota_exception_preserves_reason_kind(self):
+        from aigc.members import classify_cli_failure, QuotaUnavailable
+        error = QuotaUnavailable("provider throttled the request", kind="rate_limit")
+        self.assertIsInstance(error, MemberError)
+        self.assertEqual(classify_cli_failure(error), "rate_limit")
+        self.assertEqual(classify_cli_failure(MemberError("insufficient_quota")), "quota")
+
+    def test_only_failed_cli_envelopes_raise_quota_exception(self):
+        from unittest import mock
+        from aigc.members import QuotaUnavailable, classify_cli_failure
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings["membership_only"] = False
+        answer = "Example: quota exhausted; HTTP 429 means throttling."
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            for member in ("claude", "gpt", "gemini"):
+                adapter = CliMember(member, settings)
+                if member == "claude":
+                    output = json.dumps({"result": answer, "is_error": False, "subtype": "success"})
+                elif member == "gemini":
+                    output = json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": answer}})
+                else:
+                    output = answer
+                with self.subTest(member=member), \
+                        mock.patch.object(adapter, "_command", return_value="fixture-cli"), \
+                        mock.patch("aigc.members.run_process", return_value=(0, output, "")):
+                    self.assertEqual(adapter.ask("question", cwd), answer)
+                with self.subTest(member=member), \
+                        mock.patch.object(adapter, "_command", return_value="fixture-cli"), \
+                        mock.patch("aigc.members.run_process", return_value=(1, "", "HTTP 429: quota exceeded")):
+                    with self.assertRaises(QuotaUnavailable) as caught:
+                        adapter.ask("question", cwd)
+                    self.assertEqual(classify_cli_failure(caught.exception), "quota")
+                with self.subTest(member=member), \
+                        mock.patch.object(adapter, "_command", return_value="fixture-cli"), \
+                        mock.patch("aigc.members.run_process", side_effect=MemberError("超过 30 秒还没完成，已停止")):
+                    with self.assertRaises(MemberError) as caught:
+                        adapter.ask("question", cwd)
+                    self.assertNotIsInstance(caught.exception, QuotaUnavailable)
+                    self.assertEqual(classify_cli_failure(caught.exception), "")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -75,6 +75,16 @@ class MemberError(Exception):
     """成员这次没能给出回复（未安装、未登录、额度用完、超时……）。"""
 
 
+class QuotaUnavailable(MemberError):
+    """A failed CLI operation explicitly reported exhausted quota or throttling."""
+
+    def __init__(self, message: str, kind: str = "quota"):
+        if kind not in ("quota", "rate_limit"):
+            raise ValueError("unknown quota failure kind")
+        super().__init__(message)
+        self.kind = kind
+
+
 class Cancelled(Exception):
     """群主点了停止。"""
 
@@ -416,16 +426,77 @@ def _tail(text: str, limit: int = 500) -> str:
     return text if len(text) <= limit else "……" + text[-limit:]
 
 
+def classify_cli_failure(message) -> str:
+    """Classify an already-failed CLI operation; never call on successful answers.
+
+    Return ``quota``, ``rate_limit`` or an empty string. Ordinary quota notices,
+    authentication errors and timeouts do not establish an exhausted allowance.
+    Accept MemberError as a convenience for the engine's exception handler.
+    """
+    if isinstance(message, QuotaUnavailable):
+        return message.kind
+    if isinstance(message, MemberError):
+        message = str(message)
+    if not isinstance(message, str):
+        return ""
+    text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", message).casefold().replace("’", "'")
+    quota_patterns = (
+        r"\binsufficient_quota\b",
+        r"\bquota[\s_-]+(?:(?:is|was|has been)\s+)?(?:exhausted|exceeded|depleted)\b",
+        r"\bexceeded\s+(?:(?:your|the|current|available)\s+)*quota\b",
+        r"\busage[\s_-]+limit[\s_-]+(?:(?:is|was|has been)\s+)?(?:reached|exceeded)\b",
+        r"\byou(?:'ve| have)\s+hit\s+your\s+(?:(?:usage|message|weekly|daily|monthly)\s+)?limit\b",
+        r"\bno\s+remaining\s*quota\b",
+        r"\bno\s+quota\s+remaining\b",
+        r"额度(?:已(?:经)?)?(?:用尽|用完|耗尽|不足)",
+        r"超(?:过|出)(?:了)?(?:可用|使用)?额度",
+    )
+    # Prefer explicit exhausted allowance over a generic accompanying HTTP 429.
+    if any(re.search(pattern, text) for pattern in quota_patterns):
+        return "quota"
+    rate_patterns = (
+        r"\brate_limit_error\b",
+        r"\brate[\s_-]+limit[\s_-]+(?:(?:is|was|has been)\s+)?(?:reached|exceeded)\b",
+        r"\btoo\s+many\s+requests\b",
+        r"\b(?:http(?:/\d(?:\.\d)?)?(?:\s+error)?|status(?:[\s_-]*code)?|response\s+code|error\s+code)[\s\"':=()-]{0,8}429\b",
+        r"请求(?:过于频繁|过多|被限流)",
+        r"(?:触发|已被|遭到)限流",
+    )
+    if any(re.search(pattern, text) for pattern in rate_patterns):
+        return "rate_limit"
+    return ""
+
+
 def explain(text: str, member: str) -> str:
     """把常见的报错翻译成能照着做的提示。"""
     raw = _tail(text)
     low = raw.lower()
-    if any(k in low for k in ("usage limit", "rate limit", "limit reached", "quota", "429", "too many requests")):
-        return "额度用完或被限流了，稍后再试。原始信息：" + raw
+    kind = classify_cli_failure(text)
+    if kind == "quota":
+        return "额度已用尽，请在官方客户端确认恢复时间。原始信息：" + raw
+    if kind == "rate_limit":
+        return "请求被限流，请稍后恢复调用。原始信息：" + raw
     if any(k in low for k in ("not logged in", "please log in", "login", "log in", "unauthorized", "401",
                               "authenticat", "credential", "expired")):
         return "没有登录或登录已过期：%s。原始信息：%s" % (CLI_INFO[member]["login"], raw)
     return raw or "没有任何输出"
+
+
+def _cli_error(text: str, member: str, prefix: str = "") -> MemberError:
+    """Use only after an explicit failed CLI result, not while parsing replies."""
+    kind = classify_cli_failure(text)
+    message = prefix + explain(text, member)
+    return QuotaUnavailable(message, kind) if kind else MemberError(message)
+
+
+def _reported_model(value) -> Optional[str]:
+    """Keep bounded model labels, never objects, control characters or markup."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/+\[\] ()-]{0,199}", value):
+        return None
+    return value
 
 
 # ---------------------------------------------------------------- 三家的调用方式
@@ -435,6 +506,9 @@ class CliMember:
         self.member = member
         self.settings = settings
         self.conf = dict(settings["members"][member])
+        # CLI reports are evidence about usage/configuration, not proof of the
+        # backend model which produced the final answer. No report stays empty.
+        self.last_metadata: dict = {}
 
     def _command(self) -> str:
         cmd = find_command(self.member, self.conf)
@@ -445,6 +519,7 @@ class CliMember:
         return cmd
 
     def ask(self, prompt: str, cwd: Path, cancel: Optional[CancelToken] = None) -> str:
+        self.last_metadata = {}
         env, _ = member_env(self.member, self.settings)
         timeout = int(self.conf.get("timeout") or 600)
         cmd = self._command()
@@ -475,12 +550,22 @@ class CliMember:
             result = data.get("result")
             result = result if isinstance(result, str) else ""
             if code != 0 or data.get("is_error") or data.get("subtype") not in (None, "success"):
-                raise MemberError(explain(result or str(data.get("subtype") or "") or err, "claude"))
+                raise _cli_error(result or str(data.get("subtype") or "") or err, "claude")
             if not result.strip():
                 raise MemberError("回复为空")
+            usage = data.get("modelUsage")
+            if isinstance(usage, dict):
+                models = list(dict.fromkeys(model for model in
+                              (_reported_model(key) for key in usage) if model))
+                if models:
+                    # modelUsage can include subagents; never pick one as the
+                    # model that necessarily produced this final answer.
+                    key = "reported_model" if len(models) == 1 else "reported_models"
+                    self.last_metadata = {key: models[0] if len(models) == 1 else models,
+                                          "report_kind": "usage"}
             return result
         if code != 0:
-            raise MemberError(explain(err or out, "claude"))
+            raise _cli_error(err or out, "claude")
         raise MemberError("没能解析 Claude Code 的输出：" + _tail(out or err))
 
     # Codex CLI：codex exec，提示词走标准输入，最终回复写到文件
@@ -507,7 +592,7 @@ class CliMember:
             except OSError:
                 pass
         if code != 0:
-            raise MemberError(explain(err or out, "gpt") if (err or out) else "调用失败（退出码 %s）" % code)
+            raise _cli_error(err or out or "调用失败（退出码 %s）" % code, "gpt")
         if text.strip():
             return text
         if code == 0 and out.strip():  # 个别版本只把最终回复打印到标准输出
@@ -528,6 +613,7 @@ class CliMember:
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         results = []
+        configured_models = set()
         for line in out.splitlines():
             try:
                 event = json.loads(line)
@@ -535,18 +621,27 @@ class CliMember:
                 continue
             if isinstance(event, dict) and event.get("event") == "result" and isinstance(event.get("result"), dict):
                 results.append(event["result"])
+            if isinstance(event, dict) and event.get("event") == "init" and isinstance(event.get("init"), dict):
+                model = _reported_model(event["init"].get("model"))
+                if model:
+                    configured_models.add(model)
         if len(results) == 1:
             data = results[0]
             response = data.get("response")
             status = str(data.get("status") or "").upper()
             if code != 0 or status != "SUCCESS":
                 reason = str(data.get("error") or err or "未完成")
-                raise MemberError("Gemini 调用未成功（%s），部分回复未写入看板或记忆。%s" % (status or "未知状态", explain(reason, "gemini")))
+                raise _cli_error(reason, "gemini", "Gemini 调用未成功（%s），部分回复未写入看板或记忆。" % (status or "未知状态"))
             if isinstance(response, str) and response.strip():
+                if len(configured_models) == 1:
+                    # init.model echoes CLI configuration. It is not a
+                    # server-side attestation of the model used for inference.
+                    self.last_metadata = {"reported_model": next(iter(configured_models)),
+                                          "report_kind": "configuration"}
                 return response
             raise MemberError("Gemini 回复为空或格式不正确")
         if code != 0:
-            raise MemberError(explain(err or out, "gemini"))
+            raise _cli_error(err or out, "gemini")
         raise MemberError("没有收到唯一的 agy 完成事件，请升级 Antigravity CLI（需要 stream-json 输入输出支持）。" + _tail(err))
 
 
@@ -565,8 +660,10 @@ class DemoMember:
     def __init__(self, member: str, delay: float = 1.2):
         self.member = member
         self.delay = delay
+        self.last_metadata: dict = {"simulation": True}
 
     def ask(self, prompt: str, cwd: Path, cancel: Optional[CancelToken] = None) -> str:
+        self.last_metadata = {"simulation": True}
         if self.delay > 0:
             wait = self.delay * random.uniform(0.6, 1.4)
             if cancel:

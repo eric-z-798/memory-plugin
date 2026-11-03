@@ -19,9 +19,12 @@ from typing import List, Optional
 from . import board as board_mod
 from . import prompts
 from .common import MEMBER_ORDER, clip, name_of, normalize_member, now
-from .members import CancelToken, Cancelled, MemberError
+from .members import CancelToken, Cancelled, MemberError, classify_cli_failure
 from .store import StoreError
 from .memory import MemoryError
+from .routing import clean_overrides, resolve_route, route_settings
+from .availability import AvailabilityStore
+from .quota import QuotaMonitor
 
 MENTION_RE = re.compile(r"[@＠]\s?(claude|chatgpt|codex|gpt|gemini|全体成员|全体|所有人|大家|all|everyone)", re.I)
 ALL_WORDS = {"全体成员", "全体", "所有人", "大家", "all", "everyone"}
@@ -60,6 +63,8 @@ class GroupRunner:
         # 每位成员最近一次成功发言时看到的最后一条消息编号，用来避免重复发言
         self.seen: dict = {}
         self._memory_context: dict = {}
+        self._routing_snapshot = None
+        self._paused_at_round_start = set()
 
     # ----- 对外
     def snapshot(self) -> dict:
@@ -72,14 +77,16 @@ class GroupRunner:
                 "since": self._since,
             }
 
-    def submit(self, job: dict) -> None:
+    def submit(self, job: dict, require_idle: bool = False) -> None:
         job.setdefault("auto", 0)
         with self._lock:
+            if require_idle and (self._worker or self._jobs):
+                raise ValueError("请等当前讨论结束后再补答")
             if not job["auto"]:
                 # 群主的新指令优先，排队中的自动续轮作废
                 self._jobs = deque(j for j in self._jobs if not j.get("auto"))
                 last = self._jobs[-1] if self._jobs else None
-                if last is not None:
+                if last is not None and not (last.get("retry_only") or job.get("retry_only")):
                     self._merge(last, job)
                 else:
                     self._jobs.append(job)
@@ -130,9 +137,9 @@ class GroupRunner:
             try:
                 if self.store.exists(self.gid):
                     self._run_round(job, cancel)
-                    if not cancel.cancelled:
+                    if not cancel.cancelled and not job.get("retry_only"):
                         self._maybe_summarize(cancel)
-                    if not cancel.cancelled:
+                    if not cancel.cancelled and not job.get("retry_only"):
                         self._maybe_auto_continue(job)
             except StoreError:
                 pass  # 群在发言过程中被删除了
@@ -151,11 +158,28 @@ class GroupRunner:
         with self._lock:
             self._phase = phase
 
-    def _system(self, text: str, subtle: bool = False) -> None:
-        self.store.append_message(self.gid, {"kind": "system", "author": "system", "text": text, "subtle": subtle})
+    def _system(self, text: str, subtle: bool = False, model_route: Optional[dict] = None,
+                retry_member: Optional[str] = None, task: str = "reply") -> None:
+        message = {"kind": "system", "author": "system", "text": text, "subtle": subtle}
+        if model_route is not None:
+            message["model_route"] = model_route
+        if retry_member is not None:
+            message.update(incomplete=True, retry_member=retry_member, task=task)
+        self.store.append_message(self.gid, message)
+
+    def _select_model(self, member, group, settings, task, query, prompt):
+        # Freeze host choices for the whole round, including peer review and summary.
+        if self._routing_snapshot is not None:
+            group = self._routing_snapshot["group"]
+            settings = self._routing_snapshot["settings"]
+            query = self._routing_snapshot["query"]
+        route = resolve_route(member, settings, group, task, query, context_chars=len(prompt))
+        return route, route_settings(settings, member, route)
 
     # ----- 一轮发言
     def _run_round(self, job: dict, cancel: CancelToken) -> None:
+        self._routing_snapshot = None
+        self._paused_at_round_start = {m for m, state in self.engine.availability.snapshot().items() if state["paused"]}
         with self.store.lock(self.gid):
             group = self.store.load_group(self.gid)
             members = [m for m in group.get("members", []) if m in MEMBER_ORDER]
@@ -184,6 +208,7 @@ class GroupRunner:
             query = next((m.get("text", "") for m in reversed(messages) if m.get("kind") == "user"), "")
             # All members in this round receive the same durable memory version.
             self._memory_context = self.store.memory.context(group["project_id"], query, budget=6000)
+            self._routing_snapshot = copy.deepcopy({"group": group, "settings": self.store.load_settings(), "query": query})
 
         if mode == "parallel" and len(participants) > 1:
             self._parallel_round(participants, job, cancel, review)
@@ -246,6 +271,9 @@ class GroupRunner:
 
     def _speak(self, member: str, task: str, cancel: CancelToken, upto_seq: Optional[int] = None,
                frozen: Optional[dict] = None) -> bool:
+        if member in self._paused_at_round_start or self.engine.availability.snapshot()[member]["paused"]:
+            self._system("%s 已暂停，本轮跳过；其评审仍待补充。可在模型设置中恢复。" % name_of(member), subtle=True)
+            return False
         start = now()
         with self._lock:
             self._speaking[member] = start
@@ -257,21 +285,40 @@ class GroupRunner:
             seen_seq = upto_seq if upto_seq is not None else (msgs[-1]["seq"] if msgs else 0)
             prompt = prompts.build_member_prompt(group, board, msgs, member, task, settings, upto_seq,
                                                   memory_context=self._memory_context)
+            route = None
             try:
-                raw = self.engine.registry.adapter(member, settings).ask(
-                    prompt, self.store.workspace(self.gid), cancel)
+                query = next((m.get("text", "") for m in reversed(msgs) if m.get("kind") == "user"), "")
+                route, selected = self._select_model(member, group, settings, task, query, prompt)
+                route["quota_snapshot"] = self.engine.quota.get(member, selected)
+                if cancel.cancelled:
+                    raise Cancelled()
+                if self.engine.availability.snapshot()[member]["paused"]:
+                    self._system("%s 已暂停，本次请求未发出。" % name_of(member), retry_member=member, task=task, model_route=route)
+                    return False
+                adapter = self.engine.registry.adapter(member, selected)
+                raw = adapter.ask(prompt, self.store.workspace(self.gid), cancel)
+                route.update(getattr(adapter, "last_metadata", {}))
             except Cancelled:
+                self._system("%s 的本次发言已中断，尚未完成。" % name_of(member), retry_member=member, task=task, model_route=route)
                 return False
-            except MemberError as exc:
+            except (MemberError, ValueError) as exc:
                 if not cancel.cancelled:
-                    self._system("%s 这次没能回复：%s" % (name_of(member), exc))
+                    if isinstance(exc, MemberError):
+                        self.engine.record_member_failure(member, exc)
+                    paused = self.engine.availability.snapshot()[member]["paused"]
+                    suffix = "；已暂停该成员的新调用，其他成员可继续。" if paused else ""
+                    self._system("%s 这次没能回复：%s%s" % (name_of(member), exc, suffix), model_route=route, retry_member=member, task=task)
+                else:
+                    self._system("%s 的本次发言已中断，尚未完成。" % name_of(member), retry_member=member, task=task, model_route=route)
                 return False
             if cancel.cancelled:
+                self._system("%s 的本次发言已中断，尚未完成。" % name_of(member), retry_member=member, task=task, model_route=route)
                 return False
 
             visible, status, err = board_mod.extract_status(raw)
             with self.store.lock(self.gid):
                 if cancel.cancelled:
+                    self._system("%s 的本次发言已中断，尚未完成。" % name_of(member), retry_member=member, task=task, model_route=route)
                     return False
                 board = self.store.load_board(self.gid)
                 members = self.store.load_group(self.gid).get("members", [])
@@ -293,6 +340,7 @@ class GroupRunner:
                     "memory_revision": self._memory_context.get("revision"),
                     "memory_ids": [m["id"] for m in self._memory_context.get("items", [])],
                     "memory_proposals": candidates,
+                    "model_route": route,
                 })
                 # AI proposals stay pending, even when other AI members repeat or agree.
                 if isinstance(candidates, list):
@@ -338,14 +386,29 @@ class GroupRunner:
         for sec in order:
             if cancel.cancelled:
                 return
+            if sec in self._paused_at_round_start or self.engine.availability.snapshot()[sec]["paused"]:
+                continue
             with self._lock:
                 self._speaking[sec] = now()
+            route = None
             try:
                 prompt = prompts.build_summary_prompt(group, board, fold, sec)
-                raw = self.engine.registry.adapter(sec, settings).ask(prompt, self.store.workspace(self.gid), cancel)
+                query = next((m.get("text", "") for m in reversed(fold) if m.get("kind") == "user"), "")
+                route, selected = self._select_model(sec, group, settings, "summary", query, prompt)
+                route["quota_snapshot"] = self.engine.quota.get(sec, selected)
+                if cancel.cancelled:
+                    raise Cancelled()
+                if self.engine.availability.snapshot()[sec]["paused"]:
+                    continue
+                adapter = self.engine.registry.adapter(sec, selected)
+                raw = adapter.ask(prompt, self.store.workspace(self.gid), cancel)
+                route.update(getattr(adapter, "last_metadata", {}))
             except Cancelled:
                 return
-            except MemberError:
+            except (MemberError, ValueError) as exc:
+                if isinstance(exc, MemberError):
+                    self.engine.record_member_failure(sec, exc)
+                self._system("%s 未能整理摘要：%s" % (name_of(sec), exc), subtle=True, model_route=route)
                 continue
             finally:
                 with self._lock:
@@ -360,12 +423,13 @@ class GroupRunner:
                 board["summary_upto"] = upto
                 board["summary_by"] = sec
                 board["summary_ts"] = now()
+                board["summary_model_route"] = route
                 board_mod.log(board, sec, "更新了前情摘要（截至 #%d）" % upto)
                 self.store.save_board(self.gid, board)
                 group = self.store.load_group(self.gid)
                 group["secretary_index"] = group.get("secretary_index", 0) + 1
                 self.store.save_group(group)
-            self._system("%s 整理了前情摘要（截至 #%d），可以在看板里查看。" % (name_of(sec), upto), subtle=True)
+            self._system("%s 整理了前情摘要（截至 #%d），可以在看板里查看。" % (name_of(sec), upto), subtle=True, model_route=route)
             return
         self._system("这次前情摘要没有整理成功，下一轮会再试。", subtle=True)
 
@@ -379,7 +443,8 @@ class GroupRunner:
         with self._lock:
             if self._jobs:  # 群主已经有新的指令在排队
                 return
-        members = [m for m in group.get("members", []) if m in MEMBER_ORDER]
+        availability = self.engine.availability.snapshot()
+        members = [m for m in group.get("members", []) if m in MEMBER_ORDER and not availability[m]["paused"]]
         board = self.store.load_board(self.gid)
         owing, disputed = [], False
         items = [("decision", d) for d in board["decisions"]] + [("task", t) for t in board["tasks"]]
@@ -405,8 +470,11 @@ class Engine:
     def __init__(self, store, registry):
         self.store = store
         self.registry = registry
+        self.availability = AvailabilityStore(store.root)
+        self.quota = QuotaMonitor(demo=getattr(registry, "demo", True))
         self._runners: dict = {}
         self._lock = threading.Lock()
+        self._retry_lock = threading.Lock()
 
     def runner(self, gid: str) -> GroupRunner:
         with self._lock:
@@ -415,7 +483,39 @@ class Engine:
             return self._runners[gid]
 
     def state(self, gid: str) -> dict:
-        return self.runner(gid).snapshot()
+        state = self.runner(gid).snapshot()
+        state["model_availability"] = self.availability.snapshot()
+        state["incomplete_members"] = self.incomplete_members(gid)
+        state["model_quota"] = self.quota.snapshot()
+        return state
+
+    def incomplete_members(self, gid: str) -> dict:
+        pending = {}
+        for message in self.store.messages(gid):
+            if message.get("incomplete") and message.get("retry_member") in MEMBER_ORDER:
+                pending[message["retry_member"]] = {"id": message["id"], "seq": message["seq"], "task": message.get("task", "reply")}
+            elif message.get("kind") == "chat":
+                pending.pop(message.get("author"), None)
+        return pending
+
+    def retry_member(self, gid: str, member: str) -> None:
+        # Claim the pending failure once across concurrent HTTP requests. The
+        # runner also checks idle atomically against normal message submission.
+        with self._retry_lock:
+            if member not in MEMBER_ORDER or member not in self.store.load_group(gid).get("members", []):
+                raise ValueError("该成员不在群里")
+            if self.availability.snapshot()[member]["paused"]:
+                raise ValueError("请先核对额度并恢复该成员，再补答")
+            if self.state(gid)["running"]:
+                raise ValueError("请等当前讨论结束后再补答")
+            if member not in self.incomplete_members(gid):
+                raise ValueError("该成员没有待补的失败发言")
+            self.runner(gid).submit({"type": "round", "participants": [member], "task": "continue", "trigger": None, "retry_only": True}, require_idle=True)
+
+    def record_member_failure(self, member: str, error) -> None:
+        kind = classify_cli_failure(error)
+        if kind:
+            self.availability.pause(member, kind, "CLI 报告额度不足或限流，已暂停新调用。请核对账号额度，恢复后手动启用；切换模型不保证恢复额度。")
 
     def post_user_message(self, gid: str, text: str) -> dict:
         msg = self.store.append_message(gid, {"kind": "user", "author": "user", "text": text})
@@ -449,6 +549,33 @@ class Engine:
             self.runner(gid).submit({"type": "round", "participants": None, "task": "reply", "trigger": msg["seq"]})
         return result
 
+    def model_preview(self, gid: str, text: str, task: str = "reply") -> dict:
+        """Compute an estimate with saved configuration; no CLI, message or job is created."""
+        if task not in ("reply", "mention", "parallel", "review", "continue", "vote", "debate", "summary"):
+            raise ValueError("不支持的讨论阶段")
+        with self.store.lock(gid):
+            group = self.store.load_group(gid)
+            settings = self.store.load_settings()
+            board = self.store.load_board(gid)
+            messages = list(self.store.messages(gid))
+        if text:
+            messages.append({"kind": "user", "author": "user", "text": text,
+                             "seq": messages[-1]["seq"] + 1 if messages else 1})
+        else:
+            text = next((m.get("text", "") for m in reversed(messages) if m.get("kind") == "user"), "")
+        memory = self.store.memory.context(group["project_id"], text, budget=6000)
+        routes, errors = {}, {}
+        for member in group.get("members", []):
+            if member not in MEMBER_ORDER:
+                continue
+            prompt = (prompts.build_summary_prompt(group, board, messages, member) if task == "summary" else
+                      prompts.build_member_prompt(group, board, messages, member, task, settings, memory_context=memory))
+            try:
+                routes[member] = resolve_route(member, settings, group, task, text, context_chars=len(prompt))
+            except ValueError as exc:
+                errors[member] = str(exc)
+        return {"routes": routes, "errors": errors, "estimate": True}
+
     def update_group(self, gid: str, changes: dict) -> dict:
         with self.store.lock(gid):
             group = self.store.load_group(gid)
@@ -460,6 +587,10 @@ class Engine:
                     raise ValueError("找不到所选项目")
                 group["project_id"] = project_id
             before = list(group.get("members", []))
+            if "model_overrides" in changes:
+                group["model_overrides"] = clean_overrides(changes["model_overrides"])
+                for member in group["model_overrides"]:
+                    resolve_route(member, self.store.load_settings(), group, "reply", "")
             for key, typ in GROUP_FIELDS.items():
                 if key not in changes:
                     continue
