@@ -5,6 +5,7 @@
 
 # Runtime memory data
 /data/
+/demo-data/
 /local-data/
 *.db
 *.db-*
@@ -37,3 +38,6 @@ coverage/
 Thumbs.db
 *.swp
 *.swo
+
+# Local verification artifacts
+/work/

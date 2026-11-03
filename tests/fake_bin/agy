@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""测试用的假 Antigravity CLI：仅接受官方 stream-json 标准输入契约。"""
+import json
+import os
+import re
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("1.0.16")
+    sys.exit(0)
+assert "-p" not in args, "stream input must not combine with a prompt flag"
+assert args[args.index("--input-format") + 1] == "stream-json"
+assert args[args.index("--output-format") + 1] == "stream-json"
+assert re.fullmatch(r"\d+s", args[args.index("--print-timeout") + 1])
+payloads = [json.loads(line) for line in sys.stdin.read().splitlines() if line.strip()]
+assert len(payloads) == 1 and payloads[0]["event"] == "user"
+prompt = payloads[0]["message"]["content"]
+assert isinstance(prompt, str)
+log = os.environ.get("FAKE_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"cli": "agy", "args": args, "prompt_len": len(prompt),
+                            "cwd": os.getcwd(),
+                            "api_key": any(k in os.environ for k in ("GEMINI_API_KEY", "ANTIGRAVITY_API_KEY", "AGY_ADC_AUTH"))}) + "\n")
+mode = os.environ.get("FAKE_MODE", "ok")
+if mode == "garbage":
+    print("not json")
+    sys.exit(0)
+print("Update available")
+print(json.dumps({"event": "init", "conversation_id": "c1"}))
+print(json.dumps({"event": "step_update", "step_update": {"text_delta": "partial text"}}))
+status = "TIMEOUT" if mode == "partial" else "SUCCESS"
+result = {"event": "result", "result": {"conversation_id": "c1", "status": status,
+          "response": "Gemini 收到" + ("（标准输入 %d 字）" % len(prompt) if len(prompt) > 20000 else ""), "usage": {}}}
+print(json.dumps(result, ensure_ascii=False))
+if mode == "duplicate_result":
+    print(json.dumps(result, ensure_ascii=False))
+if mode == "nonzero_with_reply":
+    sys.exit(1)

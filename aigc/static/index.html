@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>AI 群聊</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<div class="app" id="app">
+
+  <aside class="sidebar" id="sidebar" aria-label="群聊列表">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="brand-name">AI 群聊</span>
+    </div>
+    <button class="btn primary block" id="btn-new" type="button">新建群聊</button>
+    <nav class="group-list" id="group-list" aria-label="我的群聊"></nav>
+    <button class="btn ghost block" id="btn-memory-side" type="button" disabled>共享记忆</button>
+    <button class="btn ghost block" id="btn-settings" type="button">成员与连接</button>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <main class="main" id="main">
+    <header class="chat-head" id="chat-head" hidden>
+      <button class="icon-btn only-narrow" id="btn-menu" type="button" aria-label="打开群聊列表">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <div class="title-wrap">
+        <h1 id="group-title"></h1>
+        <div class="sub" id="group-sub"></div>
+      </div>
+      <div class="seats" id="seats" role="group" aria-label="在群成员，点击可让成员进出群"></div>
+      <div class="head-actions">
+        <div class="seg" id="mode-seg" role="radiogroup" aria-label="发言方式">
+          <button type="button" role="radio" data-mode="sequential" title="一个接一个发言，后面的能看到前面的">依次</button>
+          <button type="button" role="radio" data-mode="parallel" title="同时独立作答，互相看不到，答完再互评">背靠背</button>
+        </div>
+        <button class="btn" id="btn-memory" type="button" title="管理项目记忆与跨群共享">记忆</button>
+        <button class="btn" id="btn-continue" type="button">继续讨论</button>
+        <button class="btn danger" id="btn-stop" type="button" hidden>停止</button>
+        <button class="icon-btn" id="btn-more" type="button" aria-label="更多操作" aria-haspopup="menu">
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="tabs" id="tabs" role="tablist" hidden>
+      <button type="button" role="tab" data-tab="chat" aria-selected="true">群聊</button>
+      <button type="button" role="tab" data-tab="board" aria-selected="false">看板 <span class="badge" id="tab-badge" hidden></span></button>
+    </div>
+
+    <div class="banner" id="banner" role="status" hidden></div>
+
+    <div class="stream-wrap" id="stream-wrap" hidden>
+      <section class="stream" id="stream" aria-label="聊天记录">
+        <div class="stream-inner" id="stream-inner"></div>
+      </section>
+      <button class="new-pill" id="new-pill" type="button" hidden>有新消息</button>
+    </div>
+    <div class="typing" id="typing" aria-live="polite" hidden></div>
+
+    <form class="composer" id="composer" hidden>
+      <div class="composer-inner">
+        <div class="mention-row" id="mention-row">
+          <button type="button" class="at-btn m-claude" data-at="Claude">@Claude</button>
+          <button type="button" class="at-btn m-gpt" data-at="GPT">@GPT</button>
+          <button type="button" class="at-btn m-gemini" data-at="Gemini">@Gemini</button>
+          <span class="hint">Enter 发送，Shift+Enter 换行</span>
+        </div>
+        <div class="compose-row">
+          <textarea id="input" rows="1" placeholder="说点什么。@某一位可以只请它回答" aria-label="输入消息"></textarea>
+          <button class="btn primary" id="btn-send" type="submit">发送</button>
+        </div>
+      </div>
+    </form>
+
+    <section class="welcome" id="welcome" hidden>
+      <div class="welcome-inner">
+        <button class="icon-btn only-narrow" id="btn-menu-2" type="button" aria-label="打开群聊列表">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <h2>把 Claude、GPT、Gemini<br>拉进同一个群</h2>
+        <div class="seat-line">
+          <span class="seat m-claude">Claude</span>
+          <span class="seat m-gpt">GPT</span>
+          <span class="seat m-gemini">Gemini</span>
+        </div>
+        <ul>
+          <li>每个群围绕一个项目或问题。你说一句，三家依次或背靠背回答，彼此都能看到对方说了什么。</li>
+          <li>需要拍板的事写进右边的共享看板：三家都同意才生效。你随时可以提意见、直接确认或否决。</li>
+          <li>把重要信息存入共享记忆。三家发言前会读取相关记忆，同一项目的新群也能接续背景。</li>
+          <li>全部通过各家官方命令行和你自己的会员登录调用，不需要 API Key。</li>
+        </ul>
+        <div class="actions">
+          <button class="btn primary" id="btn-new-2" type="button">新建群聊</button>
+          <button class="btn" id="btn-settings-2" type="button">检查成员连接</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <aside class="board" id="board" aria-label="共享看板">
+    <div class="board-head">
+      <h2>共享看板</h2>
+      <span class="rev" id="board-rev"></span>
+    </div>
+    <div class="board-body" id="board-body"></div>
+  </aside>
+</div>
+
+<div id="modal-root"></div>
+<div class="toast-root" id="toast-root" aria-live="polite"></div>
+</body>
+</html>
