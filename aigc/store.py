@@ -167,16 +167,30 @@ class Store:
     # ---------- 全局设置 ----------
     def load_settings(self) -> dict:
         with self._settings_lock:
-            data = read_json(self.root / "settings.json", {})
-        merged = copy.deepcopy(DEFAULT_SETTINGS)
-        for key, value in data.items():
-            if key == "members" and isinstance(value, dict):
-                for mid, conf in value.items():
-                    if mid in merged["members"] and isinstance(conf, dict):
-                        merged["members"][mid].update(conf)
-            else:
-                merged[key] = value
-        return merged
+            path = self.root / "settings.json"
+            data = read_json(path, {})
+            merged = copy.deepcopy(DEFAULT_SETTINGS)
+            for key, value in data.items():
+                if key == "members" and isinstance(value, dict):
+                    for mid, conf in value.items():
+                        if mid in merged["members"] and isinstance(conf, dict):
+                            merged["members"][mid].update(conf)
+                else:
+                    merged[key] = value
+            if "settings_schema" not in data:
+                # Old saves wrote defaults too: false has UNKNOWN provenance.
+                # Apply the approved open-network policy once, disclose the
+                # uncertainty, and never reinterpret a subsequent saved choice.
+                changed = [mid for mid in MEMBER_ORDER if merged["members"][mid].get("web") is False]
+                for mid in changed:
+                    merged["members"][mid]["web"] = True
+                merged["settings_schema"] = 1
+                merged["web_explicit"] = []
+                if changed:
+                    merged["web_migration"] = {"source": "legacy_unknown", "members": changed, "acknowledged": False}
+                if path.exists() and changed:
+                    atomic_write_json(path, merged)
+            return merged
 
     def save_settings(self, settings: dict) -> dict:
         with self._settings_lock:
@@ -204,6 +218,7 @@ class Store:
                     pass
             if "web" in conf:
                 target["web"] = bool(conf["web"])
+                clean["web_explicit"] = sorted(set(clean.get("web_explicit", [])) | {mid})
         for field, low, high in (("recent_window", 4, 60), ("summary_batch", 2, 40)):
             if field in settings:
                 try:
@@ -212,6 +227,8 @@ class Store:
                     pass
         if "membership_only" in settings:
             clean["membership_only"] = bool(settings["membership_only"])
+        if settings.get("acknowledge_web_migration") is True and clean.get("web_migration"):
+            clean["web_migration"]["acknowledged"] = True
         for mid in MEMBER_ORDER:
             resolve_route(mid, clean, {}, "reply", "")
         atomic_write_json(self.root / "settings.json", clean)

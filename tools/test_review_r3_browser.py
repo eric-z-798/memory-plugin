@@ -1,3 +1,4 @@
+from qa_auth import private_data_directory
 """Deterministic slow-load, stale-response and draft isolation regressions; demo only."""
 from qa_auth import BOOTSTRAP, TOKEN, urlopen as qa_urlopen, authenticate, authenticate_async
 import asyncio
@@ -14,7 +15,7 @@ from playwright.async_api import async_playwright, expect
 ROOT=Path(__file__).resolve().parents[1]
 
 async def main():
-    with tempfile.TemporaryDirectory(prefix='xingshu-r3-') as data:
+    with private_data_directory() as data:
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         base=f'http://127.0.0.1:{port}'

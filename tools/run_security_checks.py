@@ -16,9 +16,9 @@ sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip
 initial_status=subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True)
 commands=[('python-all',['python3','-m','unittest','discover','-s','tests'],{}),
           ('dom',['node','tools/test_ui_dom.cjs'],{})]
-for name in ('test_review_r1','test_review_r1_followup','test_review_r1_sequence','test_review_r1_json_identity','test_review_r2','test_review_r3','test_review_r4','test_security_boundaries','test_review_r5'):
+for name in ('test_review_r1','test_review_r1_followup','test_review_r1_sequence','test_review_r1_json_identity','test_review_r2','test_review_r3','test_review_r4','test_security_boundaries','test_review_r5','test_review_r6'):
     commands.append((name,['python3','-m','unittest','discover','-s','tests','-p',name+'.py'],{}))
-for name in ('test_browser','test_routing_browser','test_setup_browser','test_review_r3_browser','test_review_r4_browser','test_security_browser','test_review_r5_browser'):
+for name in ('test_browser','test_routing_browser','test_setup_browser','test_review_r3_browser','test_review_r4_browser','test_security_browser','test_review_r5_browser','test_web_migration_browser','test_startup_security','test_checkout_location'):
     commands.append((name,['python3','tools/'+name+'.py'],{}))
 for mixed in ('0','1'):
     for iteration in range(1,2):

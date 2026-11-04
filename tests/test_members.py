@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from aigc.members import CancelToken, Cancelled, CliMember, MemberError, Registry  # noqa: E402
+from secure_fixtures import secure_temporary_directory
 from aigc.store import DEFAULT_SETTINGS  # noqa: E402
 
 FAKE = ROOT / "tests" / "fake_bin"
@@ -30,9 +31,18 @@ class CliTest(unittest.TestCase):
         self.env_backup = dict(os.environ)
         os.environ["FAKE_LOG"] = str(self.log)
         os.environ.pop("FAKE_MODE", None)
+        fixture = secure_temporary_directory()
+        self.addCleanup(fixture.cleanup)
+        fake = Path(fixture.name) / 'bin'
+        shutil.copytree(FAKE, fake)
+        # copytree preserves archive modes (which can be group-writable).
+        # Only these newly copied synthetic fixtures are changed.
+        fake.chmod(0o700)
+        for script in fake.iterdir():
+            script.chmod(0o700)
         self.settings = copy.deepcopy(DEFAULT_SETTINGS)
         for m, cmd in (("claude", "claude"), ("gpt", "codex"), ("gemini", "agy")):
-            self.settings["members"][m]["command"] = str(FAKE / cmd)
+            self.settings["members"][m]["command"] = str(fake / cmd)
 
     def tearDown(self):
         os.environ.clear()

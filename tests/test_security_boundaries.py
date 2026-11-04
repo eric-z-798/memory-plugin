@@ -11,6 +11,7 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 sys.path[:0]=[str(Path(__file__).resolve().parents[1]),str(Path(__file__).resolve().parent)]
+from secure_fixtures import secure_temporary_directory
 import test_server
 import test_engine
 
@@ -30,7 +31,7 @@ class AccessBoundary(test_server.Base):
 
     def test_command_path_validation_and_execution_revalidation(self):
         from aigc.members import find_command
-        with tempfile.TemporaryDirectory(dir=str(Path.cwd())) as directory:
+        with secure_temporary_directory() as directory:
             path=Path(directory)/'synthetic-cli';path.write_text('#!/bin/sh\nexit 0\n');path.chmod(0o700)
             body={'members':{'claude':{'command':str(path)}}}
             self.assertEqual(self.request('PUT','/api/settings',body)[0],200)
@@ -143,7 +144,7 @@ class Withdrawal(unittest.TestCase):
 class ProcessOwnership(unittest.TestCase):
     def test_second_server_same_directory_refused(self):
         root=Path(__file__).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as directory:
+        with secure_temporary_directory() as directory:
             with socket.socket() as sock:
                 sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
             cmd=[sys.executable,'run.py','--demo','--no-browser','--data-dir',directory,'--port',str(port)]
@@ -216,7 +217,7 @@ except RuntimeError:
         from aigc.security import DataDirectoryLock
         with tempfile.TemporaryDirectory() as temporary:
             with patch.object(run,'Store',side_effect=OSError('synthetic failed startup')):
-                with self.assertRaises(OSError):run.main(['--demo','--no-browser','--data-dir',temporary])
+                with self.assertRaisesRegex(SystemExit, "synthetic failed startup"):run.main(['--demo','--no-browser','--data-dir',temporary])
             with DataDirectoryLock(temporary):pass
 
     def test_distinct_directories_run_simultaneously_and_normal_exit_releases(self):

@@ -2556,6 +2556,15 @@
     renderHeader();
 
     const nodes = [];
+    if (settings.web_migration && !settings.web_migration.acknowledged) {
+      const notice = h('div', { class: 'hint-box', role: 'status' },
+        h('p', {}, '旧版联网关闭值的来源未知，无法判断是旧默认还是主动选择。已按新的联网决定开启 ' + settings.web_migration.members.map(m => NAMES[m] || m).join('、') + '；可在下方关闭并保存，后续选择会保留。'),
+        h('button', { type: 'button', class: 'btn', onclick: async () => {
+          try { await api('PUT', '/api/settings', { acknowledge_web_migration: true }); notice.remove(); }
+          catch (e) { toast(e.message, true); }
+        } }, '知道了，不再提示'));
+      nodes.push(notice);
+    }
     nodes.push(h('div', { class: 'setup-entry' },
       h('div', {}, h('strong', {}, '需要安装、登录或配置代理？'), h('p', { class: 'meta' }, '打开引导面板；这里保留命令路径、模型等高级设置。')),
       h('button', { type: 'button', class: 'btn', onclick: openSetup }, '安装与登录')));

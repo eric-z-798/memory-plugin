@@ -1,3 +1,4 @@
+from qa_auth import private_data_directory
 """Real Chromium input/viewport regressions. Synthetic demo data only; no real CLI."""
 from qa_auth import BOOTSTRAP, TOKEN, urlopen as qa_urlopen, authenticate, authenticate_async
 import json
@@ -15,7 +16,7 @@ from playwright.sync_api import sync_playwright, expect
 ROOT=Path(__file__).resolve().parents[1]
 OUTPUT=Path(os.environ.get('XINGSHU_QA_OUTPUT', str(ROOT/'work'/'r1-browser')))
 OUTPUT.mkdir(parents=True, exist_ok=True)
-with tempfile.TemporaryDirectory(prefix='xingshu-r1-') as data:
+with private_data_directory() as data:
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
     base=f'http://127.0.0.1:{port}'

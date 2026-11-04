@@ -1,3 +1,4 @@
+from qa_auth import private_data_directory
 from qa_auth import BOOTSTRAP, TOKEN, urlopen as qa_urlopen, authenticate, authenticate_async
 import json
 import sys
@@ -14,7 +15,7 @@ from playwright.sync_api import sync_playwright, expect
 PROJECT = Path(__file__).resolve().parents[1]
 ROOT = PROJECT / 'work' / 'browser-qa'
 ROOT.mkdir(parents=True, exist_ok=True)
-data_dir = tempfile.TemporaryDirectory(prefix='run-', dir=ROOT)
+data_dir = private_data_directory()
 with socket.socket() as sock:
     sock.bind(('127.0.0.1', 0))
     port = sock.getsockname()[1]

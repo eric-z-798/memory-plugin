@@ -1,3 +1,4 @@
+from qa_auth import private_data_directory
 """Onboarding browser QA, isolated from real installation, login and networking.
 
 Run ``python tools/test_setup_browser.py`` with Playwright and Chromium installed.
@@ -31,7 +32,7 @@ LOGIN_COMMANDS = {"claude": "claude auth login", "gpt": "codex login", "gemini":
 
 def main():
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="data-", dir=ARTIFACTS) as directory:
+    with private_data_directory() as directory:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]

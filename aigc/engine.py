@@ -535,7 +535,7 @@ class GroupRunner:
                 return
         availability = self.engine.availability.snapshot()
         if self._failed_members:
-            self._system("本回合失败成员不自动重试：%s；失败发言可点“补答此成员”，摘要等新的用户回合再试。" % "、".join(name_of(m) for m in sorted(self._failed_members)), subtle=True)
+            self._system("本回合失败成员不自动重试：%s；只有界面仍提供补答的失败发言才可补答；完整可读或写入结果未知的回复请先核对，摘要等新的用户回合再试。" % "、".join(name_of(m) for m in sorted(self._failed_members)), subtle=True)
         members = [m for m in group.get("members", []) if m in MEMBER_ORDER
                    and not availability[m]["paused"] and m not in self._failed_members]
         board = self.store.load_board(self.gid)

@@ -1,3 +1,4 @@
+from qa_auth import private_data_directory
 """Browser acceptance of model routing using an isolated, offline demo server.
 
 Run with ``python tools/test_routing_browser.py``. Requires Playwright and a
@@ -28,7 +29,7 @@ PROFILES = {member: {tier: "qa-%s-%s" % (member, tier) for tier in TIERS}
 
 def main():
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="data-", dir=ARTIFACTS) as directory:
+    with private_data_directory() as directory:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
