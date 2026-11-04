@@ -59,3 +59,6 @@ python3 tools/test_review_r1_browser.py
 
 
 后续针对 `f1e8430` 的独立复验发现4300位seq进位的B边界；进一步修复、精确序号范围及兼容边界见 [序号恢复修复](review-r1-sequence.md)。该修复仍需新SHA独立复审。
+
+
+后续 `711306e` 的独立 QA 发现嵌套seq误隔离有效记录的阻断回归；移除全行正则、分离完整记录与畸形行解析的修复见 [顶层身份修复](review-r1-json-identity.md)，仍需对新SHA独立复审。

@@ -17,7 +17,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import re
 import math
 import tempfile
 import shutil
@@ -63,6 +62,74 @@ def _next_message_seq(high: int) -> int:
     if high >= MAX_MESSAGE_SEQ:
         raise StoreError("消息序号已耗尽；保留原数据，请创建新群，不能复用或重新编号")
     return high + 1
+
+
+def _unique_object(pairs):
+    """Reject ambiguous JSON objects instead of silently using a duplicate's last value."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+class _IntegerToken(str):
+    """A JSON integer token, without converting untrusted digits to a Python int."""
+
+
+def _recover_top_level_sequences(raw: bytes):
+    """Read complete top-level members of a damaged object's trustworthy prefix.
+
+    raw_decode consumes each whole JSON value (including nested containers and
+    escaped strings). Stop at the first structural error; never search through
+    malformed content for something that merely looks like a seq field.
+    Duplicate top-level seq keys reserve every usable candidate, not first/last.
+    Replacement decoding cannot invent ASCII JSON delimiters in bad UTF-8 bytes;
+    the original bytes are still quarantined, never used as recovered content.
+    """
+    text = raw.decode("utf-8", errors="replace")
+    decoder = json.JSONDecoder(parse_int=_IntegerToken)
+    candidates, ignored = [], []
+
+    def space(pos):
+        while pos < len(text) and text[pos] in " \t\r\n":
+            pos += 1
+        return pos
+
+    pos = space(0)
+    if pos >= len(text) or text[pos] != "{":
+        return candidates, ignored
+    pos = space(pos + 1)
+    while pos < len(text) and text[pos] != "}":
+        try:
+            if text[pos] != '"':
+                break  # Object member names must be JSON strings, never numeric tokens.
+            key, end = decoder.raw_decode(text, pos)
+            if not isinstance(key, str):
+                break
+            pos = space(end)
+            if pos >= len(text) or text[pos] != ":":
+                break
+            value, end = decoder.raw_decode(text, space(pos + 1))
+            pos = space(end)
+            # raw_decode can parse the numeric prefix of `123xyz` or `123.`.
+            # Only a complete member value with a valid boundary is trustworthy.
+            if pos < len(text) and text[pos] not in ",}":
+                break
+            if key == "seq" and isinstance(value, _IntegerToken) and not value.startswith("-") and value != "0":
+                digits = value.encode("ascii")
+                if (len(digits) > len(_MAX_SEQ_BYTES)
+                        or (len(digits) == len(_MAX_SEQ_BYTES) and digits > _MAX_SEQ_BYTES)):
+                    ignored.append({"digits": len(digits), "reason": "outside_exact_sequence_range"})
+                else:
+                    candidates.append(int(value))
+            if pos >= len(text) or text[pos] == "}":
+                break
+            pos = space(pos + 1)
+        except (ValueError, RecursionError):
+            break
+    return candidates, ignored
 
 
 class Store:
@@ -268,31 +335,18 @@ class Store:
             if gid not in self._messages:
                 msgs, bad, high = [], [], 0
                 ignored_sequences = []
+                quarantined_records = []
                 path = self.group_dir(gid) / "messages.jsonl"
                 raw = path.read_bytes() if path.exists() else b""
                 for line_number, line in enumerate(raw.splitlines(keepends=True), 1):
                     if not line.strip():
                         continue
-                    # Salvage only an explicit positive integer seq, never arbitrary digits.
-                    match = re.search(rb'"seq"\s*:\s*([1-9][0-9]*)(?=\s*[,}\r\n]|$)', line)
                     try:
-                        # Validate decimal bytes BEFORE conversion or successor allocation.
-                        # Do not let corrupt input exhaust Python's conversion budget or
-                        # introduce identifiers that the native UI rounds silently.
-                        if match:
-                            digits = match.group(1)
-                            if (len(digits) > len(_MAX_SEQ_BYTES)
-                                    or (len(digits) == len(_MAX_SEQ_BYTES) and digits > _MAX_SEQ_BYTES)):
-                                ignored_sequences.append({"line": line_number, "digits": len(digits),
-                                                          "reason": "outside_exact_sequence_range"})
-                                raise ValueError("sequence outside exact range")
-                            high = max(high, int(digits))
-                        entry = json.loads(line.decode("utf-8"))
+                        # Valid records are interpreted ONLY by their decoded top-level seq.
+                        entry = json.loads(line.decode("utf-8"), object_pairs_hook=_unique_object)
                         if not isinstance(entry, dict) or type(entry.get("seq")) is not int or entry["seq"] <= 0:
                             raise ValueError("invalid seq")
                         if entry["seq"] > MAX_MESSAGE_SEQ:
-                            ignored_sequences.append({"line": line_number, "digits": len(str(entry["seq"])),
-                                                      "reason": "outside_exact_sequence_range"})
                             raise ValueError("sequence outside exact range")
                         high = max(high, entry["seq"])
                         if msgs and entry["seq"] <= msgs[-1]["seq"]:
@@ -304,7 +358,12 @@ class Store:
                             raise ValueError("invalid message fields")
                         entry.setdefault("ts", 0)
                         msgs.append(entry)
-                    except (ValueError, UnicodeDecodeError, RecursionError):
+                    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+                        candidates, ignored = _recover_top_level_sequences(line)
+                        high = max([high] + candidates)
+                        ignored_sequences.extend(dict(item, line=line_number) for item in ignored)
+                        quarantined_records.append({"line": line_number, "reason": str(exc)[:200],
+                                                    "reserved_sequences": candidates})
                         bad.append(line)
                 if bad:
                     token = "%d-%s" % (int(now() * 1000000), uuid.uuid4().hex[:8])
@@ -321,6 +380,7 @@ class Store:
                                           + ("未采用 %d 个超出精确正整数范围的畸形序号；行号、位数和原因见 recovery.ignored_sequences，原字节保留在隔离文件。" % len(ignored_sequences)
                                              if ignored_sequences else "")),
                                  "recovery": {"ignored_sequences": ignored_sequences,
+                                              "quarantined_records": quarantined_records,
                                               "max_exact_sequence": MAX_MESSAGE_SEQ}})
                     # Original file remains intact until the fully flushed replacement is ready.
                     fd, temp = tempfile.mkstemp(prefix="messages-recovery-", dir=str(path.parent))
