@@ -56,3 +56,6 @@ python3 tools/test_review_r1_browser.py
 
 
 后续独立 QA 在 `6bd1f713` 上发现 B 超长 seq 与 G 摘要失败重复调用遗漏；修复与再次验证见 [R1 后续修复](review-r1-followup.md)。前文 266 项记录是前序版本自测，不代表遗漏不存在或新版本已独立验收。
+
+
+后续针对 `f1e8430` 的独立复验发现4300位seq进位的B边界；进一步修复、精确序号范围及兼容边界见 [序号恢复修复](review-r1-sequence.md)。该修复仍需新SHA独立复审。

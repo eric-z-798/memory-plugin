@@ -49,8 +49,20 @@ DEFAULT_SETTINGS = {
 for _member in MEMBER_ORDER:
     DEFAULT_SETTINGS["members"][_member]["routing"] = default_routing(_member)
 
+# JSON message IDs are also consumed as JavaScript Numbers by the native UI.
+# Larger integers cannot be used as exact source/after/retry identifiers there.
+MAX_MESSAGE_SEQ = 2 ** 53 - 1
+_MAX_SEQ_BYTES = str(MAX_MESSAGE_SEQ).encode("ascii")
+
+
 class StoreError(Exception):
     pass
+
+
+def _next_message_seq(high: int) -> int:
+    if high >= MAX_MESSAGE_SEQ:
+        raise StoreError("消息序号已耗尽；保留原数据，请创建新群，不能复用或重新编号")
+    return high + 1
 
 
 class Store:
@@ -255,21 +267,33 @@ class Store:
         with self.lock(gid):
             if gid not in self._messages:
                 msgs, bad, high = [], [], 0
+                ignored_sequences = []
                 path = self.group_dir(gid) / "messages.jsonl"
                 raw = path.read_bytes() if path.exists() else b""
-                for line in raw.splitlines(keepends=True):
+                for line_number, line in enumerate(raw.splitlines(keepends=True), 1):
                     if not line.strip():
                         continue
                     # Salvage only an explicit positive integer seq, never arbitrary digits.
                     match = re.search(rb'"seq"\s*:\s*([1-9][0-9]*)(?=\s*[,}\r\n]|$)', line)
                     try:
-                        # Integer conversion can reject malformed, overlong numbers too.
-                        # Keep it inside the same raw-byte quarantine boundary as JSON decoding.
+                        # Validate decimal bytes BEFORE conversion or successor allocation.
+                        # Do not let corrupt input exhaust Python's conversion budget or
+                        # introduce identifiers that the native UI rounds silently.
                         if match:
-                            high = max(high, int(match.group(1)))
+                            digits = match.group(1)
+                            if (len(digits) > len(_MAX_SEQ_BYTES)
+                                    or (len(digits) == len(_MAX_SEQ_BYTES) and digits > _MAX_SEQ_BYTES)):
+                                ignored_sequences.append({"line": line_number, "digits": len(digits),
+                                                          "reason": "outside_exact_sequence_range"})
+                                raise ValueError("sequence outside exact range")
+                            high = max(high, int(digits))
                         entry = json.loads(line.decode("utf-8"))
                         if not isinstance(entry, dict) or type(entry.get("seq")) is not int or entry["seq"] <= 0:
                             raise ValueError("invalid seq")
+                        if entry["seq"] > MAX_MESSAGE_SEQ:
+                            ignored_sequences.append({"line": line_number, "digits": len(str(entry["seq"])),
+                                                      "reason": "outside_exact_sequence_range"})
+                            raise ValueError("sequence outside exact range")
                         high = max(high, entry["seq"])
                         if msgs and entry["seq"] <= msgs[-1]["seq"]:
                             raise ValueError("duplicate or unordered seq")
@@ -291,9 +315,13 @@ class Store:
                             f.write(data)
                             f.flush()
                             os.fsync(f.fileno())
-                    msgs.append({"seq": high + 1, "id": "m-" + uuid.uuid4().hex[:10], "ts": now(),
+                    msgs.append({"seq": _next_message_seq(high), "id": "m-" + uuid.uuid4().hex[:10], "ts": now(),
                                  "kind": "system", "author": "system", "subtle": True,
-                                 "text": "恢复聊天记录：已隔离 %d 行到 %s；原文件备份 %s。" % (len(bad), quarantine.name, backup.name)})
+                                 "text": ("恢复聊天记录：已隔离 %d 行到 %s；原文件备份 %s。" % (len(bad), quarantine.name, backup.name)
+                                          + ("未采用 %d 个超出精确正整数范围的畸形序号；行号、位数和原因见 recovery.ignored_sequences，原字节保留在隔离文件。" % len(ignored_sequences)
+                                             if ignored_sequences else "")),
+                                 "recovery": {"ignored_sequences": ignored_sequences,
+                                              "max_exact_sequence": MAX_MESSAGE_SEQ}})
                     # Original file remains intact until the fully flushed replacement is ready.
                     fd, temp = tempfile.mkstemp(prefix="messages-recovery-", dir=str(path.parent))
                     try:
@@ -313,16 +341,17 @@ class Store:
         with self.lock(gid):
             msgs = self.messages(gid)
             msg = dict(msg)
-            msg["seq"] = max((m["seq"] for m in msgs), default=0) + 1
+            msg["seq"] = _next_message_seq(max((m["seq"] for m in msgs), default=0))
             msg.setdefault("id", "m-" + uuid.uuid4().hex[:10])
             msg.setdefault("ts", now())
+            encoded = (json.dumps(msg, ensure_ascii=False) + "\n").encode("utf-8")
             with open(self._existing_dir(gid) / "messages.jsonl", "ab+") as f:
                 f.seek(0, os.SEEK_END)
                 if f.tell():
                     f.seek(-1, os.SEEK_END)
                     if f.read(1) != b"\n":
                         f.write(b"\n")
-                f.write((json.dumps(msg, ensure_ascii=False) + "\n").encode("utf-8"))
+                f.write(encoded)
                 f.flush()
                 os.fsync(f.fileno())
             self._messages[gid].append(msg)

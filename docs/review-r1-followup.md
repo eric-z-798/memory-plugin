@@ -43,3 +43,6 @@ python3 tools/test_review_r1_browser.py
 - V1–V7 真实 CLI 范围全部未核实；仅临时合成数据和演示/假 CLI，无真实账号、凭据、聊天或付费模型调用。Windows/macOS、真实断电、真机及屏幕阅读器未验。
 - 没有改 main、合并、部署或新建 PR；没有重建 DOT_HANDOFF.md。
 - 这次是处理独立 QA 的遗漏，**不是 Claude 已复审，也不是验收完成**。请对最终交付新 SHA 复审上述两项，并保留 [原 R1 交接](review-r1.md) 的剩余边界。
+
+
+后续针对 `f1e8430` 的独立复验发现4300位seq进位的B边界；进一步修复、精确序号范围及兼容边界见 [序号恢复修复](review-r1-sequence.md)。该修复仍需新SHA独立复审。
