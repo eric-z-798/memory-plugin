@@ -1,0 +1,38 @@
+# Security and confirmation follow-up
+
+Base: W/X checkpoint `b34f49b39bc7ddd10d19dcc2b5f80d872db4235b` (313 Python, 90 DOM, targeted and browser checks passed on that exact commit). Earlier Claude-reviewed base: `5e8d7afe21011ed97c5b30b3d3211a31d0d8dce3`. This document describes project code, not a deployed security configuration or independent acceptance.
+
+## Implemented decisions
+
+**C / R4:** every App generates a fresh 32-byte random URL-safe capability. Every API read/write, HEAD, refresh and export requires `X-Xingshu-Token`, checked with constant-time comparison. Existing Host, X-AIGC, password and throttling checks remain. The startup URL carries the capability in its fragment; the browser removes it, keeps it in sessionStorage (or memory when storage is unavailable), and uses headers. No production token override flag or persistent token file exists. Password mode requires both factors. Static files remain available without the capability, subject to existing password/Host rules. Export uses an authenticated fetch rather than an unauthenticated link.
+
+Changes to CLI command paths, extra arguments and membership_only require authorized loopback/local-only mode. Remote listeners cannot change those fields even with password and token. Existing unchanged fields in settings forms remain compatible. Custom commands are resolved to absolute ordinary files; POSIX ownership is checked for the file and containing directory, and group/other write access is rejected along the resolved path. Custom paths are revalidated before use. Automatic PATH discovery remains the launcher's trusted environment. Windows ACL validation is not implemented or claimed verified; capability authentication still applies. This does not isolate processes using the same OS account, administrators, a compromised terminal/browser, or already-readable data files.
+
+Remote desktop means using the browser on the host with its startup link. Default listening remains loopback. No firewall, user permissions, persistent credentials, actual remote-desktop service or external authorization was configured. SSH tunnelling and optional password HTTP mode remain available; raw HTTP must not be treated as encrypted transport.
+
+**B-6 / R3:** user decision: “同一电脑可以多开但是一个数据目录只能由一个窗口调用，加个锁”. `run.py` acquires an OS lock on the resolved data directory before Store/Engine startup. POSIX uses nonblocking flock; Windows uses byte locking. Lock files are never deleted or treated as stale based on PID, so PID reuse is irrelevant. Aliases resolve to the same directory/lock inode. Failed initialization and normal exit close the descriptor; process death releases its kernel lock. Distinct directories can run simultaneously. POSIX writable-by-others data directories/lock files are rejected rather than silently chmodded. This locks **server instances**, not individual browser tabs. Multiple tabs attached to one server share that instance; there is no tab lease/exclusive browser window claim. Direct library Store users, hostile manual lock-file removal, cross-host/network filesystems and untested Windows semantics are outside the verified boundary.
+
+**D / R2:** immediately before each member dispatch (including review/retry), re-read current existence/confirmed status for frozen memory IDs. Removed/pending items are omitted and recorded in `memory_withdrawn_ids`; `memory_ids` records what was actually included. Kept content/version stays frozen for this round; edits apply next round. Database read failures stop dispatch rather than use stale status. Delete still stops related discussions. Tests cover sequential withdrawal, global withdrawal during parallel first-stage calls, queued calls, two groups, deletion and fail-closed reads. The recheck is the dispatch boundary: a concurrent change after that check cannot revoke an already-started dispatch, and content already sent or present in historical messages cannot be recalled.
+
+**R1:** multi-member agreement records `confirmed_by=ai_consensus`; explicit force/manual creation records `user`. Single-member decision and task proposals cannot pass consensus and require explicit user confirmation. Existing effective/todo fields remain compatible but must not alone be interpreted as human approval. Labels, prompts and exports distinguish AI consensus and human confirmation. Legacy effective AI entries with no reliable source become `legacy_unknown`, never inferred to be user-confirmed; existing statuses are not silently rewritten. Reopening/commenting clears confirmation. AI output cannot set this provenance field.
+
+**R5:** new defaults enable networking for all three members, including GPT's existing web capability; Claude WebSearch/WebFetch remain open. Existing explicit saved settings are preserved. Shell/file tool restrictions and membership-only policy are not relaxed. Networking is not permission to read/export secrets or use paid APIs; no real CLI/account or external paid service was exercised.
+
+## Tests and assertion changes
+
+Initial synthetic probes reproduced all three boundaries: missing capability accepted, second same-directory server accepted, withdrawn memory sent to later members. Raw failing and passing outputs are retained separately.
+
+Security tests cover missing/wrong tokens, GET/HEAD/refresh/export, password+token combination, remote sensitive writes, path validation/revalidation, token rotation and no persistence; lock alias/symlink/concurrent-process/crash/normal-release/distinct-directory/startup-failure cases; withdrawal/read-error/concurrent/queue cases; and AI versus human confirmation. Browser tests exercise fragment removal, refresh, authenticated export, isolated unauthenticated context, blocked sessionStorage, single-AI confirmation and visible provenance. Existing W/X browser tests retain real delayed/error responses and byte-preserving archival.
+
+Existing test changes are explicit requirements, not deleted coverage:
+- HTTP Base and browser clients now carry synthetic authorized capabilities. Browser subprocesses inject a fixed fake token source in test bootstrap only; production exposes no bypass option. Existing Host/CSRF/password assertions remain.
+- Board consensus effect labels now say AI consensus. Closed-vote test explicitly user-confirms a single-AI proposal before testing closed behavior.
+- Engine single-AI comment test now expects discussing before/after AI response, preserving the assertion that the member saw the comment.
+- Candidate persistence/notes regression explicitly user-confirms its single-AI task fixture before testing task updates; one note/need and no duplicate retry assertions remain.
+- W/X assertion changes are listed in `review-r4.md`.
+
+The development suite exposed an overly broad edit in the summary path and a namespace-specific filesystem ownership assumption; both were corrected in implementation, not by skipping tests. A browser navigation fixture changed query parameters to force a new document for its second group, preserving the same visibility assertions. Development failures remain in the evidence.
+
+## Remaining verification
+
+Author evidence includes exact SHA, command, environment, stdout/stderr and exit code. Original independent QA and Claude must review the final same SHA; author runs are not independent acceptance. Real CLI V1–V7, account/model availability, Windows/macOS, remote desktop itself, real devices/screen readers, actual power/disk failures, no-hardlink/network filesystems, real proxy/network configurations remain unverified. R1–R5 are no longer blanket “undecided”; the implemented scope and remaining platform/security limits above are explicit. No merge or deployment is authorized/performed here.

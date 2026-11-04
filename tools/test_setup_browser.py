@@ -5,6 +5,7 @@ The server stays in demo mode. Native job and network responses are browser
 fixtures; server-side subprocess and probe functions are also explicitly blocked.
 """
 
+from qa_auth import BOOTSTRAP, TOKEN, urlopen as qa_urlopen, authenticate, authenticate_async
 import copy
 import json
 import re
@@ -41,6 +42,8 @@ import sys
 import subprocess
 from pathlib import Path
 import run
+import secrets
+secrets.token_urlsafe=lambda n: 'synthetic-browser-qa-token-only'
 import aigc.setup as setup
 import aigc.server as server
 
@@ -64,7 +67,7 @@ run.main()
                     if server.poll() is not None:
                         raise AssertionError("Guarded demo server exited; see server.log")
                     try:
-                        with urllib.request.urlopen(base + "/api/info", timeout=1):
+                        with qa_urlopen(base + "/api/info", timeout=1):
                             break
                     except OSError:
                         time.sleep(.1)
@@ -90,6 +93,7 @@ def run_browser(base, sentinel):
         browser = playwright.chromium.launch(executable_path=shutil.which("chromium") or None,
                                              headless=True, args=["--no-sandbox"])
         page = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=1, reduced_motion="reduce")
+        authenticate(page)
         page.add_init_script("""window.__copiedSetupCommands = [];
             Object.defineProperty(navigator, 'clipboard', {configurable: true,
                 value: {writeText: async text => window.__copiedSetupCommands.push(text)}});""")

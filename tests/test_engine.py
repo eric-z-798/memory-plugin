@@ -225,12 +225,12 @@ class EngineTest(unittest.TestCase):
         self.engine.update_group(self.gid, {"members": ["claude"]})
         self.engine.post_user_message(self.gid, "定方案")
         self.wait()
-        self.assertEqual(self.store.load_board(self.gid)["decisions"][0]["status"], "effective")
+        self.assertEqual(self.store.load_board(self.gid)["decisions"][0]["status"], "discussing")
         self.reg.behaviors["claude"] = lambda p: "收到意见，同意保留。" + status(votes=[{"id": "D-001", "vote": "agree"}])
         result = self.engine.board_action(self.gid, "comment", {"id": "D-001", "text": "再想想成本"}, respond=True)
         self.assertIn("退回讨论", result)
         self.wait()
-        self.assertEqual(self.store.load_board(self.gid)["decisions"][0]["status"], "effective")
+        self.assertEqual(self.store.load_board(self.gid)["decisions"][0]["status"], "discussing")
         self.assertIn("再想想成本", self.reg.prompts_of("claude")[-1])
 
     def test_members_change_rechecks_consensus(self):

@@ -66,7 +66,8 @@ class Consensus(unittest.TestCase):
         self.assertEqual(d["status"], "discussing")
         fx = B.apply_status(self.b, "gemini", {"votes": {"d-001": "同意"}}, M)
         self.assertEqual(d["status"], "effective")
-        self.assertIn("D-001 生效", fx)
+        self.assertIn("D-001 AI 共识", fx)
+        self.assertEqual(d["confirmed_by"], "ai_consensus")
 
     def test_loose_ids_are_understood(self):
         B.apply_status(self.b, "claude", {"propose_decisions": ["X"]}, M)
@@ -105,7 +106,7 @@ class Consensus(unittest.TestCase):
         B.apply_status(self.b, "gpt", {"votes": [{"id": "T-001", "vote": "agree"}]}, M)
         fx = B.apply_status(self.b, "gemini", {"votes": [{"id": "T-001", "vote": "agree"}]}, M)
         self.assertEqual(t["status"], "todo")
-        self.assertIn("T-001 确认", fx)
+        self.assertIn("T-001 AI 分工共识", fx)
         B.apply_status(self.b, "gpt", {"task_updates": [{"id": "T-001", "status": "done"}]}, M)
         self.assertEqual(t["status"], "todo")  # 不是负责人，忽略
         B.apply_status(self.b, "gemini", {"task_updates": [{"id": "T-001", "status": "进行中", "note": "开始了"}]}, M)
@@ -135,7 +136,9 @@ class Consensus(unittest.TestCase):
 
     def test_votes_on_closed_items_ignored(self):
         B.apply_status(self.b, "claude", {"propose_decisions": ["X"]}, ["claude"])
-        self.assertEqual(self.b["decisions"][0]["status"], "effective")
+        self.assertEqual(self.b["decisions"][0]["status"], "discussing")
+        B.user_action(self.b, "force", {"id":"D-001"}, ["claude"])
+        self.assertEqual(self.b["decisions"][0]["confirmed_by"], "user")
         fx = B.apply_status(self.b, "gpt", {"votes": [{"id": "D-001", "vote": "disagree", "reason": "晚了"}]}, M)
         self.assertEqual(fx, [])
 

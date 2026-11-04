@@ -218,6 +218,7 @@ class R2Engine(unittest.TestCase):
         self.engine.update_group(self.gid,{'auto_rounds':0})
         b=self.store.load_board(self.gid)
         board.apply_status(b,'claude',{'propose_tasks':[{'title':'task','owner':'claude'}]},['claude'],1)
+        board.user_action(b,'force',{'id':'T-001'},['claude'])
         self.store.save_board(self.gid,b)
         response=test_engine.status(need_user='approval',task_updates=[{'id':'T-001','status':'doing','note':'same note'}],memories=[{'content':'synthetic candidate'}])
         self.reg.behaviors['claude']=lambda p:'synthetic'+response

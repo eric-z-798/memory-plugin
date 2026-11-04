@@ -90,8 +90,19 @@
     return null;
   }
 
+  let accessToken = '';
+  try {
+    const fragment = new URLSearchParams(location.hash.slice(1));
+    const incoming = fragment.get('token');
+    if (incoming) {
+      accessToken = incoming;
+      try { sessionStorage.setItem('xingshu.accessToken', incoming); } catch (e) { /* memory-only session */ }
+      history.replaceState(null, '', location.pathname + location.search + (fragment.get('group') ? '#' + fragment.get('group') : ''));
+    } else accessToken = sessionStorage.getItem('xingshu.accessToken') || '';
+  } catch (e) { /* the in-memory token still works when storage is unavailable */ }
+
   async function api(method, path, body) {
-    const opt = { method, headers: { 'X-AIGC': '1' }, cache: 'no-store' };
+    const opt = { method, headers: { 'X-AIGC': '1', 'X-Xingshu-Token': accessToken }, cache: 'no-store' };
     if (body !== undefined) {
       opt.headers['Content-Type'] = 'application/json';
       opt.body = JSON.stringify(body);
@@ -1087,20 +1098,19 @@
     return h('button', { type: 'button', class: 'seq-link', 'data-seq': seq, title: '跳到聊天记录里的原话' }, '#' + seq);
   }
 
-  function sealNote(d, members) {
-    if (d.proposer === 'user') return '群主确定';
-    const all = members.length && members.every((m) => d.votes[m] && d.votes[m].vote === 'agree');
-    return all ? '全员同意' : '群主拍板';
+  function sealNote(d) {
+    return { user: '群主已确认', ai_consensus: 'AI 共识，未经群主确认' }[d.confirmed_by] || '确认来源待核';
   }
 
   function decisionNode(d, members) {
     const open = d.status === 'discussing';
-    const label = d.withdrawn ? '已撤回' : DECISION_LABEL[d.status];
+    const label = d.withdrawn ? '已撤回' : d.status === 'effective' ? sealNote(d) : DECISION_LABEL[d.status];
     const actions = [];
     if (open) {
-      actions.push(act('提意见', () => commentItem(d)), act('直接生效', () => boardAction({ action: 'force', id: d.id }), 'strong'),
+      actions.push(act('提意见', () => commentItem(d)), act('群主确认', () => boardAction({ action: 'force', id: d.id }), 'strong'),
         act('否决', () => boardAction({ action: 'reject', id: d.id }), 'danger'));
     } else if (d.status === 'effective') {
+      if (d.confirmed_by !== 'user') actions.push(act('群主确认', () => boardAction({ action: 'force', id: d.id }), 'strong'));
       actions.push(act('提意见', () => commentItem(d)), act('重新讨论', () => boardAction({ action: 'reopen', id: d.id, respond: true })));
     } else {
       actions.push(act('重新讨论', () => boardAction({ action: 'reopen', id: d.id, respond: true })));
@@ -1119,7 +1129,7 @@
       open ? reasons(d) : null,
       userNotes(d),
       h('div', { class: 'item-actions' }, actions),
-      d.status === 'effective' ? h('span', { class: 'seal', 'aria-hidden': 'true' }, h('b', {}, '已生效'), h('small', {}, sealNote(d, members))) : null);
+      d.status === 'effective' ? h('span', { class: 'seal', 'aria-hidden': 'true' }, h('b', {}, d.confirmed_by === 'user' ? '群主确认' : 'AI / 历史'), h('small', {}, sealNote(d))) : null);
   }
 
   function taskNode(t, members) {
@@ -1130,6 +1140,7 @@
       actions.push(act('提意见', () => commentItem(t)), act('确认分工', () => boardAction({ action: 'force', id: t.id }), 'strong'),
         act('取消', () => boardAction({ action: 'reject', id: t.id }), 'danger'));
     } else if (active) {
+      if (t.confirmed_by !== 'user') actions.push(act('群主确认分工', () => boardAction({ action: 'force', id: t.id }), 'strong'));
       const st = select([['todo', '待办'], ['doing', '进行中'], ['blocked', '阻塞'], ['done', '已完成'], ['cancelled', '取消']], t.status);
       st.setAttribute('aria-label', '修改状态');
       st.addEventListener('change', quiet(() => boardAction({ action: 'set_status', id: t.id, status: st.value })));
@@ -1148,7 +1159,7 @@
     return h('article', { class: 'item st-' + t.status + ' m-' + t.owner, id: 'item-' + t.id },
       h('div', { class: 'item-head' },
         h('span', { class: 'item-id' }, t.id),
-        h('span', { class: 'state' + (proposed ? ' open' : '') + (t.status === 'blocked' ? ' blocked' : '') }, TASK_LABEL[t.status]),
+        h('span', { class: 'state' + (proposed ? ' open' : '') + (t.status === 'blocked' ? ' blocked' : '') }, TASK_LABEL[t.status] + (proposed ? '' : ' · ' + sealNote(t))),
         h('span', { class: 'owner m-' + t.owner }, '负责人 ' + (NAMES[t.owner] || t.owner)), seqLink(t.seq)),
       h('p', { class: 'item-text', html: inline(t.title) }),
       t.deliverable ? h('p', { class: 'item-sub' }, '交付：' + t.deliverable) : null,
@@ -1167,7 +1178,7 @@
       rev.textContent = '';
       body.replaceChildren(
         h('p', { class: 'b-empty' }, '看板是全群的共同记忆：群目标、决议、分工、进度和前情摘要都记在这里。'),
-        h('p', { class: 'b-empty' }, '三家每次发言前都会先读它；决议在三家都同意后盖章生效，你也可以随时提意见或直接拍板。'));
+        h('p', { class: 'b-empty' }, '三家每次发言前都会先读它；多成员一致形成 AI 共识，不代表群主确认；单 AI 提议需要你确认。'));
       updateBadge(0);
       return;
     }
@@ -1198,8 +1209,8 @@
     const open = b.decisions.filter((d) => d.status === 'discussing');
     const eff = b.decisions.filter((d) => d.status === 'effective');
     const closed = b.decisions.filter((d) => d.status === 'rejected');
-    const dec = section('决议', open.length ? open.length + ' 条讨论中' : (eff.length ? eff.length + ' 条已生效' : ''), act('添加决议', addDecision, 'strong'));
-    if (!b.decisions.length) dec.append(h('p', { class: 'b-empty' }, '还没有决议。需要拍板的事由成员提出，在群的 AI 都同意后在这里盖章生效。'));
+    const dec = section('决议', open.length ? open.length + ' 条讨论中' : (eff.length ? eff.length + ' 条共识或已确认' : ''), act('添加决议', addDecision, 'strong'));
+    if (!b.decisions.length) dec.append(h('p', { class: 'b-empty' }, '还没有决议。需要拍板的事由成员提出，多成员一致形成 AI 共识；群主确认会单独标注，单 AI 提议必须由你确认。'));
     open.forEach((d) => dec.append(decisionNode(d, members)));
     eff.forEach((d) => dec.append(decisionNode(d, members)));
     if (closed.length) dec.append(fold('dec-closed', '已否决或撤回的 ' + closed.length + ' 条', closed.map((d) => decisionNode(d, members))));
@@ -1703,11 +1714,15 @@
     ]));
   }
 
-  function exportGroup() {
-    const a = h('a', { href: '/api/groups/' + S.gid + '/export', download: (S.group.name || 'group') + '.md' });
-    document.body.append(a);
-    a.click();
-    a.remove();
+  async function exportGroup() {
+    if (!S.group) return;
+    try {
+      const response = await fetch('/api/groups/' + S.gid + '/export', { headers: { 'X-Xingshu-Token': accessToken }, cache: 'no-store' });
+      if (!response.ok) throw new Error('导出失败，请检查访问权限');
+      const url = URL.createObjectURL(await response.blob());
+      const a = h('a', { href: url, download: (S.group.name || 'group') + '.md' });
+      document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { toast(e.message, true); }
   }
 
   function confirmDeleteGroup() {

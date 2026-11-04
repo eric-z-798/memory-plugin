@@ -16,6 +16,7 @@ import json
 import mimetypes
 import re
 import socket
+import secrets
 import sys
 import threading
 import time
@@ -89,12 +90,16 @@ class HttpError(Exception):
         self.message = message
 
 
+from .security import validate_command
+
+
 class App:
     def __init__(self, store, engine, registry, password: Optional[str] = None,
                  local_only: bool = True, demo: bool = False):
         self.store = store
         self.engine = engine
         self.registry = registry
+        self.access_token = secrets.token_urlsafe(32)
         self.password = password or None
         self.local_only = local_only
         self.demo = demo
@@ -134,14 +139,14 @@ def export_markdown(group: dict, board: dict, messages: list) -> str:
     if not board["decisions"]:
         lines.append("（无）")
     for d in board["decisions"]:
-        label = "已撤回" if d.get("withdrawn") else board_mod.DECISION_STATUS.get(d["status"], d["status"])
+        label = "已撤回" if d.get("withdrawn") else board_mod.decision_label(d)
         lines.append("- **%s【%s】** %s（提议：%s）" % (d["id"], label, d["text"], name_of(d.get("proposer", ""))))
     lines += ["", "## 任务", ""]
     if not board["tasks"]:
         lines.append("（无）")
     for t in board["tasks"]:
         lines.append("- **%s【%s】** %s｜负责人：%s%s" % (
-            t["id"], board_mod.TASK_STATUS.get(t["status"], t["status"]), t["title"], name_of(t.get("owner", "")),
+            t["id"], board_mod.TASK_STATUS.get(t["status"], t["status"]) + " · " + board_mod.confirmation_label(t), t["title"], name_of(t.get("owner", "")),
             ("｜交付：" + t["deliverable"]) if t.get("deliverable") else ""))
         for note in t.get("notes", []):
             lines.append("  - %s：%s" % (name_of(note.get("who", "")), note.get("text", "")))
@@ -232,7 +237,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise HttpError(405, "不支持的请求方法")
             raise HttpError(404, "找不到这个地址")
         except HttpError as exc:
-            extra = {"WWW-Authenticate": 'Basic realm="XINGSHU", charset="UTF-8"'} if exc.status == 401 else None
+            extra = {"WWW-Authenticate": 'Basic realm="XINGSHU", charset="UTF-8"'} if exc.status == 401 and exc.message == "需要登录" else None
             # 请求体可能还没读完，回完错误就断开，免得剩下的内容被当成下一个请求
             self.close_connection = True
             extra = dict(extra or {}, Connection="close")
@@ -269,6 +274,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get("Authorization"):
                     app.record_failure(ip)
                 raise HttpError(401, "需要登录")
+        if urlparse(self.path).path.startswith("/api/"):
+            token = self.headers.get("X-Xingshu-Token", "")
+            if not hmac.compare_digest(token.encode("utf-8"), app.access_token.encode("utf-8")):
+                raise HttpError(401, "需要本次启动的访问令牌，请使用终端中的完整链接")
         if method not in ("GET", "HEAD") and self.headers.get("X-AIGC") != "1":
             raise HttpError(403, "请求缺少校验头")
 
@@ -401,7 +410,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, self.app.store.load_settings())
 
     def api_put_settings(self, body):
-        if "proxy" in body:
+        current = self.app.store.load_settings()
+        sensitive = "proxy" in body or ("membership_only" in body and body["membership_only"] != current["membership_only"])
+        for member, conf in body.get("members", {}).items():
+            if not isinstance(conf, dict):
+                continue
+            old = current.get("members", {}).get(member, {})
+            for key in ("command", "extra_args"):
+                if key in conf and conf[key] != old.get(key):
+                    sensitive = True
+                    self._setup_local()
+                    if key == "command":
+                        try:
+                            conf[key] = validate_command(conf[key])
+                        except OSError as exc:
+                            raise ValueError("CLI 路径不可用：%s" % exc) from exc
+        if sensitive:
             self._setup_local()
         self.send_json(200, self.app.store.save_settings(body))
 

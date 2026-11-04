@@ -1,4 +1,5 @@
 """Real Chromium input/viewport regressions. Synthetic demo data only; no real CLI."""
+from qa_auth import BOOTSTRAP, TOKEN, urlopen as qa_urlopen, authenticate, authenticate_async
 import json
 import os
 import shutil
@@ -18,18 +19,19 @@ with tempfile.TemporaryDirectory(prefix='xingshu-r1-') as data:
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
     base=f'http://127.0.0.1:{port}'
-    proc=subprocess.Popen([sys.executable,'run.py','--demo','--no-browser','--port',str(port),'--data-dir',data],cwd=ROOT,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    proc=subprocess.Popen([sys.executable,'-c', BOOTSTRAP,'--demo','--no-browser','--port',str(port),'--data-dir',data],cwd=ROOT,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     try:
         for _ in range(100):
-            try: urllib.request.urlopen(base+'/api/info').close(); break
+            try: qa_urlopen(base+'/api/info').close(); break
             except OSError: time.sleep(.1)
         with sync_playwright() as pw:
             browser=pw.chromium.launch(executable_path=shutil.which('chromium'),headless=True,args=['--no-sandbox'])
             ctx=browser.new_context(**pw.devices['iPhone 13'])
             page=ctx.new_page(); errors=[]
+            authenticate(page)
             page.on('pageerror',lambda e:errors.append(str(e)))
             def api(method,path,body=None):
-                r=page.request.fetch(base+path,method=method,headers={'X-AIGC':'1'},data=body)
+                r=page.request.fetch(base+path,method=method,headers={'X-AIGC':'1','X-Xingshu-Token':TOKEN},data=body)
                 assert r.ok,(r.status,r.text())
                 return r.json()
             g=api('POST','/api/groups',{'name':'R1 合成浏览器测试','first_message':'请讨论合成测试','auto_rounds':0})['group']['id']

@@ -1,5 +1,6 @@
 """Real Chromium UI with synthetic storage failures and byte-preserving archive."""
 import asyncio
+from qa_auth import authenticate_async
 import json
 import shutil
 import sys
@@ -18,7 +19,8 @@ async def main():
     with tempfile.TemporaryDirectory(prefix='xingshu-r4-') as data:
         store=Store(Path(data)); registry=Registry(demo=True,demo_delay=.01)
         engine=Engine(store,registry)
-        server=make_server('127.0.0.1',0,App(store,engine,registry,demo=True))
+        app=App(store,engine,registry,demo=True)
+        server=make_server('127.0.0.1',0,app)
         threading.Thread(target=server.serve_forever,daemon=True).start()
         base=f'http://127.0.0.1:{server.server_address[1]}'
         good=store.create_group('R4 healthy',members=['claude'])['id']
@@ -29,6 +31,7 @@ async def main():
             async with async_playwright() as pw:
                 browser=await pw.chromium.launch(executable_path=shutil.which('chromium'),headless=True,args=['--no-sandbox'])
                 page=await browser.new_page(viewport={'width':1440,'height':900}); errors=[]
+                await authenticate_async(page,app.access_token)
                 page.on('pageerror',lambda e:errors.append(str(e)))
                 await page.goto(base+'/#'+good)
                 await expect(page.locator('#input')).to_be_editable()

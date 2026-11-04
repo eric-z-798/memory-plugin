@@ -4,6 +4,7 @@ Run with ``python tools/test_routing_browser.py``. Requires Playwright and a
 Chromium browser. No real member process is invoked and no personal data is used.
 """
 
+from qa_auth import BOOTSTRAP, TOKEN, urlopen as qa_urlopen, authenticate, authenticate_async
 import json
 import shutil
 import socket
@@ -36,7 +37,7 @@ def main():
         with log_path.open("w", encoding="utf-8") as log:
             # Leave enough time for the browser to observe and cancel a reply.
             # This changes only the isolated demo adapter's delay, not production.
-            bootstrap = ("from functools import partial; import run; "
+            bootstrap = ("import secrets; secrets.token_urlsafe=lambda n: 'synthetic-browser-qa-token-only'; from functools import partial; import run; "
                          "run.Registry = partial(run.Registry, demo_delay=3.0); run.main()")
             server = subprocess.Popen(
                 [sys.executable, "-c", bootstrap, "--demo", "--no-browser", "--port", str(port),
@@ -46,7 +47,7 @@ def main():
                     if server.poll() is not None:
                         raise AssertionError("Demo server exited; see %s" % log_path)
                     try:
-                        with urllib.request.urlopen(base + "/api/info", timeout=1):
+                        with qa_urlopen(base + "/api/info", timeout=1):
                             break
                     except OSError:
                         time.sleep(.1)
@@ -69,6 +70,7 @@ def run_browser(base, data_dir):
             executable_path=shutil.which("chromium") or None,
             headless=True, args=["--no-sandbox"])
         page = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=1, reduced_motion="reduce")
+        authenticate(page)
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.on("console", lambda message: errors.append("console: " + message.text)
                 if message.type == "error" else None)

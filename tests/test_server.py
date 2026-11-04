@@ -29,6 +29,7 @@ class Base(unittest.TestCase):
         registry = Registry(demo=True, demo_delay=0.01)
         self.engine = Engine(self.store, registry)
         app = App(self.store, self.engine, registry, password=self.password, local_only=self.local_only, demo=True)
+        self.access_token = app.access_token
         self.server = make_server("127.0.0.1", 0, app)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True).start()
@@ -41,7 +42,7 @@ class Base(unittest.TestCase):
 
     def request(self, method, path, body=None, headers=None, raw=None, auth=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        h = {"Host": "localhost:%d" % self.port}
+        h = {"Host": "localhost:%d" % self.port, "X-Xingshu-Token": self.access_token}
         if method not in ("GET", "HEAD"):
             h["X-AIGC"] = "1"
         if auth is not None:

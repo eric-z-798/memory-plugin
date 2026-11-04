@@ -18,6 +18,10 @@ print(context["text"])
 
 ## HTTP
 
+所有 HTTP API（含 GET、HEAD 和导出）均要求本次启动的 `X-Xingshu-Token` 请求头。修改仍需 `X-AIGC: 1`；远程密码模式另需 Basic 认证。令牌不写入数据文件，不要把真实令牌放进示例或共享日志。
+
+成员调用前会按当前存在/confirmed 状态过滤冻结的记忆快照，撤回或删除的条目记入消息 `memory_withdrawn_ids`；其余内容编辑下一轮生效。已发出调用不能收回。详见 [安全与确认规则](review-security.md)。
+
 所有修改请求需要 `Content-Type: application/json` 和 `X-AIGC: 1`。如果启用了服务密码，使用相同的 HTTP Basic 身份验证。服务本身面向单个用户；项目隔离不是多租户鉴权。
 
 | 方法与路径 | 行为 |

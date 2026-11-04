@@ -308,8 +308,9 @@ class GroupRunner:
             trigger = self._trigger_seq or next((m["seq"] for m in reversed(msgs) if m.get("author") == "user"), 0)
             progress = self.store.begin_member_context(self.gid, member, trigger)
             context_state = {}
+            memory_context = self.store.memory.revalidate_context(self._memory_context)
             prompt = prompts.build_member_prompt(group, board, msgs, member, task, settings, upto_seq,
-                memory_context=self._memory_context, trigger_seq=self._trigger_seq,
+                memory_context=memory_context, trigger_seq=self._trigger_seq,
                 seen_seq=progress.get("seen"), unread_from=progress.get("unread_from"), context_state=context_state)
             route = None
             try:
@@ -322,6 +323,12 @@ class GroupRunner:
                     self._system("%s 已暂停，本次请求未发出。" % name_of(member), retry_member=member, task=task, model_route=route)
                     return False
                 adapter = self.engine.registry.adapter(member, selected)
+                # Selection/quota checks may take time. Recheck immediately before
+                # dispatch, preserving frozen content but removing withdrawn IDs.
+                memory_context = self.store.memory.revalidate_context(self._memory_context)
+                prompt = prompts.build_member_prompt(group, board, msgs, member, task, settings, upto_seq,
+                    memory_context=memory_context, trigger_seq=self._trigger_seq,
+                    seen_seq=progress.get("seen"), unread_from=progress.get("unread_from"), context_state=context_state)
                 raw = adapter.ask(prompt, self.store.workspace(self.gid), cancel)
                 route.update(getattr(adapter, "last_metadata", {}))
             except Cancelled:
@@ -362,8 +369,9 @@ class GroupRunner:
                     "kind": "chat", "author": member, "task": task,
                     "text": visible or "（只更新了看板，没有正文）",
                     "effects": effects, "status_note": note, "elapsed": round(now() - start, 1),
-                    "memory_revision": self._memory_context.get("revision"),
-                    "memory_ids": [m["id"] for m in self._memory_context.get("items", [])],
+                    "memory_revision": memory_context.get("revision"),
+                    "memory_ids": [m["id"] for m in memory_context.get("items", [])],
+                    "memory_withdrawn_ids": memory_context.get("withdrawn_ids", []),
                     "memory_proposals": candidates,
                     "model_route": route,
                 })

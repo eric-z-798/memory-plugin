@@ -305,9 +305,11 @@ def _search_path() -> str:
 def find_command(member: str, conf: dict) -> Optional[str]:
     custom = (conf.get("command") or "").strip().strip('"')
     if custom:
-        if os.path.isfile(custom):
-            return custom
-        return shutil.which(custom) or shutil.which(custom, path=_search_path())
+        from .security import validate_command
+        try:
+            return validate_command(custom)
+        except (OSError, ValueError):
+            return None
     name = CLI_INFO[member]["command"]
     if IS_WINDOWS and member == "gemini":
         # 优先用命令行版本的 agy，避免和 Antigravity 桌面应用带的同名启动器混淆

@@ -3,7 +3,7 @@
 三家彼此没有记忆，所以群里的共识、分工和进度全部记在看板上，由工具维护：
 - 每次轮到某位成员发言，工具把看板交给它；
 - 成员在回复末尾附"状态更新"，工具解析后更新看板；
-- 决议和任务分配在全体在群 AI 成员都同意后自动生效；
+- 多成员一致只形成 AI 共识，不代表群主确认；单成员提议必须由群主确认；
 - 群主随时可以提意见（条目退回讨论、三家要先回应），也可以直接确认或否决。
 """
 
@@ -65,7 +65,20 @@ def upgrade(board: dict) -> dict:
         board.setdefault(key, value)
     for key, value in fresh["counters"].items():
         board["counters"].setdefault(key, value)
+    for item in board["decisions"] + board["tasks"]:
+        if "confirmed_by" not in item:
+            item["confirmed_by"] = ("user" if item.get("proposer") == "user" else "legacy_unknown") if item.get("status") not in ("discussing", "proposed") else None
     return board
+
+
+def confirmation_label(item):
+    return {"user": "群主已确认", "ai_consensus": "AI 共识（未经群主确认）"}.get(item.get("confirmed_by"), "确认来源待核")
+
+
+def decision_label(item):
+    if item.get("status") != "effective":
+        return DECISION_STATUS.get(item.get("status"), item.get("status", ""))
+    return {"user": "群主已确认", "ai_consensus": "AI 共识（未经群主确认）"}.get(item.get("confirmed_by"), "旧决议（确认来源待核）")
 
 
 def _next_id(board: dict, prefix: str) -> str:
@@ -137,16 +150,17 @@ def parse_task_status(value: Any) -> Optional[str]:
 # ---------------------------------------------------------------- 共识
 
 def check_consensus(board: dict, kind: str, item: dict, members: List[str]) -> Optional[str]:
-    """全体在群 AI 成员都同意，条目就生效。返回一条说明，没生效返回 None。"""
-    if not members or not is_open(kind, item):
+    """Multi-member agreement is AI consensus; single-member proposals await the user."""
+    if len(members) < 2 or not is_open(kind, item):
         return None
     if not all(item["votes"].get(m, {}).get("vote") == "agree" for m in members):
         return None
     item["status"] = "effective" if kind == "decision" else "todo"
+    item["confirmed_by"] = "ai_consensus"
     item["updated"] = now()
     for note in item.get("user_notes", []):
         note["pending"] = False
-    text = "%s 全员同意，%s" % (item["id"], "已生效" if kind == "decision" else "分工确认，进入待办")
+    text = "%s 全员同意，%s" % (item["id"], "形成 AI 共识，未经群主确认" if kind == "decision" else "形成 AI 分工共识，进入待办（未经群主确认）")
     log(board, "system", text)
     return text
 
@@ -260,7 +274,7 @@ def apply_status(board: dict, member: str, status: Any, members: List[str], seq:
         effects.append("%s %s" % (label, item["id"]))
         done = check_consensus(board, kind, item, members)
         if done:
-            effects.append("%s %s" % (item["id"], "生效" if kind == "decision" else "确认"))
+            effects.append("%s %s" % (item["id"], "AI 共识" if kind == "decision" else "AI 分工共识"))
 
     # 2. 撤回自己的提议（想修改提议时，先撤回再提新版本）
     raw_withdraw = status.get("withdraw")
@@ -291,7 +305,7 @@ def apply_status(board: dict, member: str, status: Any, members: List[str], seq:
                 same["votes"][member] = _vote(member, "agree")
                 effects.append("同意 %s" % same["id"])
                 if check_consensus(board, "decision", same, members):
-                    effects.append("%s 生效" % same["id"])
+                    effects.append("%s AI 共识" % same["id"])
             continue
         did = _next_id(board, "D")
         item = {
@@ -303,7 +317,7 @@ def apply_status(board: dict, member: str, status: Any, members: List[str], seq:
         log(board, member, "提议 %s：%s" % (did, clip(text, 80)))
         effects.append("提议 %s" % did)
         if check_consensus(board, "decision", item, members):
-            effects.append("%s 生效" % did)
+            effects.append("%s AI 共识" % did)
 
     # 4. 新任务
     for entry in _iter_tasks(status.get("propose_tasks")):
@@ -396,7 +410,7 @@ def user_action(board: dict, action: str, payload: dict, members: List[str]) -> 
             raise ValueError("请填写决议内容")
         did = _next_id(board, "D")
         board["decisions"].append({
-            "id": did, "text": clip(text, 600), "status": "effective", "proposer": "user",
+            "id": did, "text": clip(text, 600), "status": "effective", "proposer": "user", "confirmed_by": "user",
             "created": now(), "updated": now(), "votes": {}, "user_notes": [],
         })
         log(board, "user", "直接确定 %s：%s" % (did, clip(text, 80)))
@@ -411,7 +425,7 @@ def user_action(board: dict, action: str, payload: dict, members: List[str]) -> 
         board["tasks"].append({
             "id": tid, "title": clip(title, 300), "owner": owner,
             "deliverable": clip(str(payload.get("deliverable") or "").strip(), 300),
-            "status": "todo", "proposer": "user", "created": now(), "updated": now(),
+            "status": "todo", "proposer": "user", "confirmed_by": "user", "created": now(), "updated": now(),
             "votes": {}, "notes": [], "user_notes": [],
         })
         log(board, "user", "直接分配任务 %s 给 %s：%s" % (tid, name_of(owner), clip(title, 60)))
@@ -444,11 +458,13 @@ def user_action(board: dict, action: str, payload: dict, members: List[str]) -> 
         elif item["status"] != "cancelled":
             item["status"] = "proposed"
         item["votes"] = {}
+        item["confirmed_by"] = None
         item["updated"] = now()
         log(board, "user", "对 %s 提了意见，已退回讨论：%s" % (iid, clip(text, 60)))
         return "%s 已退回讨论，三家需要先回应你的意见" % iid, "（对 %s 的意见）%s" % (iid, text)
 
     if action == "force":
+        item["confirmed_by"] = "user"
         item["status"] = "effective" if kind == "decision" else "todo"
         for note in item.get("user_notes", []):
             note["pending"] = False
@@ -465,6 +481,7 @@ def user_action(board: dict, action: str, payload: dict, members: List[str]) -> 
     if action == "reopen":
         item["status"] = "discussing" if kind == "decision" else "proposed"
         item["votes"] = {}
+        item["confirmed_by"] = None
         item["updated"] = now()
         log(board, "user", "重新打开了 %s" % iid)
         return "%s 已重新打开" % iid, "（群主重新打开了 %s，请大家重新表态）%s" % (iid, text)
@@ -544,12 +561,12 @@ def render_markdown(board: dict, members: List[str]) -> str:
             if note.get("pending"):
                 lines.append("  【群主意见·工具标注】：%s" % note["text"])
     for d in done_d[-30:]:
-        lines.append("- %s【已生效】%s" % (d["id"], d["text"]))
+        lines.append("- %s【%s】%s" % (d["id"], decision_label(d), d["text"]))
     for d in rejected[-5:]:
         lines.append("- %s【%s】%s" % (d["id"], "已撤回" if d.get("withdrawn") else "已否决", clip(d["text"], 60)))
 
     lines.append("")
-    lines.append("### 任务")
+    lines.append("### 任务（AI 共识不代表群主确认）")
     proposed = [t for t in board["tasks"] if t["status"] in OPEN_TASK]
     active = [t for t in board["tasks"] if t["status"] in ACTIVE_TASK]
     finished = [t for t in board["tasks"] if t["status"] == "done"]
@@ -565,13 +582,13 @@ def render_markdown(board: dict, members: List[str]) -> str:
     for t in active:
         last = t["notes"][-1]["text"] if t.get("notes") else ""
         lines.append("- %s【%s】负责人：%s｜%s%s%s" % (
-            t["id"], TASK_STATUS[t["status"]], name_of(t["owner"]), t["title"],
+            t["id"], TASK_STATUS[t["status"]] + " · " + confirmation_label(t), name_of(t["owner"]), t["title"],
             ("｜交付：" + t["deliverable"]) if t.get("deliverable") else "",
             ("｜最新进展：" + last) if last else ""))
     for t in finished[-10:]:
         last = t["notes"][-1]["text"] if t.get("notes") else ""
-        lines.append("- %s【已完成】负责人：%s｜%s%s" % (
-            t["id"], name_of(t["owner"]), clip(t["title"], 80), ("｜" + clip(last, 80)) if last else ""))
+        lines.append("- %s【已完成 · %s】负责人：%s｜%s%s" % (
+            t["id"], confirmation_label(t), name_of(t["owner"]), clip(t["title"], 80), ("｜" + clip(last, 80)) if last else ""))
 
     recent = board["changelog"][-10:]
     if recent:

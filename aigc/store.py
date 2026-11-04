@@ -36,7 +36,7 @@ from .network import DEFAULT_PROXY, clean_proxy
 DEFAULT_SETTINGS = {
     "members": {
         "claude": {"command": "", "model": "", "extra_args": "", "timeout": 600, "web": True},
-        "gpt": {"command": "", "model": "", "extra_args": "", "timeout": 600, "web": False},
+        "gpt": {"command": "", "model": "", "extra_args": "", "timeout": 600, "web": True},
         "gemini": {"command": "", "model": "", "extra_args": "", "timeout": 600, "web": True},
     },
     # 每次发言时原样附上的最近消息条数；更早的内容由书记员压缩成摘要

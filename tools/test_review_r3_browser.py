@@ -1,4 +1,5 @@
 """Deterministic slow-load, stale-response and draft isolation regressions; demo only."""
+from qa_auth import BOOTSTRAP, TOKEN, urlopen as qa_urlopen, authenticate, authenticate_async
 import asyncio
 import json
 import shutil
@@ -17,21 +18,22 @@ async def main():
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         base=f'http://127.0.0.1:{port}'
-        proc=subprocess.Popen([sys.executable,'run.py','--demo','--no-browser','--port',str(port),'--data-dir',data],cwd=ROOT,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        proc=subprocess.Popen([sys.executable,'-c', BOOTSTRAP,'--demo','--no-browser','--port',str(port),'--data-dir',data],cwd=ROOT,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         try:
             for _ in range(100):
-                try:urllib.request.urlopen(base+'/api/info').close();break
+                try:qa_urlopen(base+'/api/info').close();break
                 except OSError:await asyncio.sleep(.1)
             async with async_playwright() as pw:
                 browser=await pw.chromium.launch(executable_path=shutil.which('chromium'),headless=True,args=['--no-sandbox'])
                 ctx=await browser.new_context(viewport={'width':1440,'height':900})
                 async def api(method,path,body=None):
-                    response=await ctx.request.fetch(base+path,method=method,headers={'X-AIGC':'1'},data=body)
+                    response=await ctx.request.fetch(base+path,method=method,headers={'X-AIGC':'1','X-Xingshu-Token':TOKEN},data=body)
                     assert response.ok,(response.status,await response.text())
                     return await response.json()
                 a=(await api('POST','/api/groups',{'name':'R3-A','members':['claude'],'auto_rounds':0}))['group']['id']
                 b=(await api('POST','/api/groups',{'name':'R3-B','members':['claude'],'auto_rounds':0}))['group']['id']
                 page=await ctx.new_page();errors=[]
+                await authenticate_async(page)
                 page.on('pageerror',lambda e:errors.append(str(e)))
                 draft_a='A saved draft\nsecond line\nthird line\nfourth line'
                 await page.add_init_script('localStorage.setItem('+json.dumps('aigc.draft.'+a)+','+json.dumps(draft_a)+');localStorage.setItem('+json.dumps('aigc.draft.'+b)+',"B saved draft");')

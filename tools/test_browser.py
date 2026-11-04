@@ -1,3 +1,4 @@
+from qa_auth import BOOTSTRAP, TOKEN, urlopen as qa_urlopen, authenticate, authenticate_async
 import json
 import sys
 import shutil
@@ -18,7 +19,7 @@ with socket.socket() as sock:
     sock.bind(('127.0.0.1', 0))
     port = sock.getsockname()[1]
 BASE = 'http://127.0.0.1:' + str(port)
-server = subprocess.Popen([sys.executable, 'run.py', '--demo', '--no-browser', '--port', str(port), '--data-dir', data_dir.name],
+server = subprocess.Popen([sys.executable, '-c', BOOTSTRAP, '--demo', '--no-browser', '--port', str(port), '--data-dir', data_dir.name],
     cwd=str(PROJECT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 def cleanup():
     server.terminate()
@@ -27,7 +28,7 @@ def cleanup():
 atexit.register(cleanup)
 for _ in range(50):
     try:
-        urllib.request.urlopen(BASE + '/api/info').close()
+        qa_urlopen(BASE + '/api/info').close()
         break
     except OSError:
         time.sleep(.1)
@@ -35,6 +36,7 @@ for _ in range(50):
 with sync_playwright() as p:
     browser = p.chromium.launch(executable_path=shutil.which('chromium') or None, headless=True, args=['--no-sandbox'])
     page = browser.new_page(viewport={'width': 1440, 'height': 1000}, device_scale_factor=1, reduced_motion='reduce')
+    authenticate(page)
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.on('console', lambda message: errors.append('console: ' + message.text)

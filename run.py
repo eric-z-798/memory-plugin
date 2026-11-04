@@ -17,6 +17,7 @@ if sys.version_info < (3, 8):
 import argparse
 import os
 import socket
+import secrets
 import threading
 import webbrowser
 from pathlib import Path
@@ -34,6 +35,7 @@ from aigc import APP_NAME, APP_NAME_LATIN, __version__  # noqa: E402
 from aigc.engine import Engine  # noqa: E402
 from aigc.members import Registry  # noqa: E402
 from aigc.server import App, make_server  # noqa: E402
+from aigc.security import DataDirectoryLock
 from aigc.store import Store  # noqa: E402
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
@@ -77,20 +79,31 @@ def main(argv=None):
             "    python3 run.py --host %s --password 你的密码\n"
             "更安全的做法是保持默认的 127.0.0.1，用 SSH 隧道访问，见 README。" % (args.host, args.host))
 
-    store = Store(Path(args.data_dir) if args.data_dir else ROOT / ("demo-data" if args.demo else "data"))
+    directory = Path(args.data_dir) if args.data_dir else ROOT / ("demo-data" if args.demo else "data")
+    with DataDirectoryLock(directory):
+        serve(args, local_only, directory)
+
+
+def serve(args, local_only, directory):
+    store = Store(directory)
     registry = Registry(demo=args.demo)
     engine = Engine(store, registry)
     app = App(store, engine, registry, password=args.password or None, local_only=local_only, demo=args.demo)
-    server, port = bind(args.host, args.port, app)
+    try:
+        server, port = bind(args.host, args.port, app)
+    except BaseException:
+        engine.shutdown()
+        raise
 
     shown_host = "localhost" if local_only else args.host
     url = "http://%s:%d" % (shown_host if ":" not in shown_host else "[%s]" % shown_host, port)
+    url += "/#token=" + app.access_token
     print("%s %s %s 已启动%s" % (APP_NAME, APP_NAME_LATIN, __version__, "（演示模式：不调用真实命令行，不消耗额度）" if args.demo else ""))
     print("数据保存在：%s" % store.root)
     if local_only:
         print("在浏览器打开：%s" % url)
     else:
-        print("在浏览器打开：http://<这台服务器的IP>:%d （用户名随意，密码是你设置的那个）" % port)
+        print("在浏览器打开：http://<这台服务器的IP>:%d/#token=%s （用户名随意，密码是你设置的那个）" % (port, app.access_token))
         print("提醒：这是 HTTP 明文连接。公网上更推荐 SSH 隧道或在前面加 HTTPS，见 README。")
     print("按 Ctrl+C 停止。")
 
