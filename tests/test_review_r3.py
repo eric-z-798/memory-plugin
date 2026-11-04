@@ -143,7 +143,9 @@ class ContextProgress(unittest.TestCase):
             self.engine.post_user_message(self.gid,'@claude next');self.wait()
         self.assertEqual(self.engine.runner(self.gid).seen['claude'],seen)
         self.assertEqual(self.store.member_context(self.gid)['claude']['seen'],seen)
-        self.assertIn('claude',self.engine.incomplete_members(self.gid))
+        self.assertNotIn('claude',self.engine.incomplete_members(self.gid))
+        self.assertTrue(any('进度未保存' in m['text'] for m in self.store.messages(self.gid)))
+        with self.assertRaises(ValueError):self.engine.retry_member(self.gid,'claude')
 
     def test_legacy_and_invalid_progress_fall_back_to_current_trigger(self):
         for i in range(30):self.store.append_message(self.gid,{'kind':'user','author':'user','text':'old '+str(i)+'甲'*3000})

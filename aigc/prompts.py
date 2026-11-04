@@ -207,7 +207,7 @@ def _bounded_messages(messages: List[dict], member: str, budget: int = 20000) ->
             break
         chosen.insert(0, rendered)
         used += len(rendered) + 2
-    text = "\n\n".join(chosen) or "（还没有聊天记录）"
+    text = "\n\n".join(chosen) or ("（已有历史未载入）" if messages else "（还没有聊天记录）")
     if len(chosen) < len(messages):
         text = "（本次上下文长度有限，更早的消息未全部载入；原文仍保存在群聊中。）\n" + text
     return text

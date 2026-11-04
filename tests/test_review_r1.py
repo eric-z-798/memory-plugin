@@ -230,7 +230,12 @@ class EngineRegressions(unittest.TestCase):
                     self.engine.post_user_message(self.gid,'写入后处理边界'); self.wait()
                 self.assertTrue(failed)
                 self.assertEqual({m for m,_ in self.reg.prompts},{'claude','gpt','gemini'})
-                self.assertTrue(self.engine.incomplete_members(self.gid))
+                if phase == 'append_message':
+                    self.assertTrue(self.engine.incomplete_members(self.gid))
+                else:
+                    self.assertFalse(self.engine.incomplete_members(self.gid))
+                    self.assertTrue(any('后续保存未完成' in m['text'] for m in self.store.messages(self.gid)))
+                    with self.assertRaises(ValueError):self.engine.retry_member(self.gid,'claude')
 
     def test_actual_summary_fold_keeps_long_constraint(self):
         self.store.save_settings({'recent_window':4,'summary_batch':2})

@@ -436,6 +436,27 @@ class Store:
                 self._messages[gid] = msgs
             return list(self._messages[gid])
 
+    def append_user_message(self, gid: str, text: str, members: List[str]) -> dict:
+        """Persist first-request anchors before accepting the user message.
+
+        A failed append may leave a future anchor, never a successful seen value.
+        member_context ignores such anchors until a message with that seq exists.
+        """
+        with self.lock(gid):
+            rows = self.messages(gid)
+            trigger = _next_message_seq(max((m["seq"] for m in rows), default=0))
+            progress = self.member_context(gid)
+            changed = False
+            for member in members:
+                if not progress.get(member):
+                    progress[member] = {"unread_from": trigger}
+                    changed = True
+            if changed:
+                group = self.load_group(gid)
+                group["member_context"] = progress
+                self.save_group(group)
+            return self.append_message(gid, {"kind": "user", "author": "user", "text": text})
+
     def append_message(self, gid: str, msg: dict) -> dict:
         with self.lock(gid):
             msgs = self.messages(gid)

@@ -429,13 +429,15 @@
       nav.replaceChildren(h('p', { class: 'sidebar-empty' }, '还没有群聊。点上面的按钮建一个。'));
       return;
     }
-    nav.replaceChildren(...S.groups.map((g) => h('button', {
+    nav.replaceChildren(...S.groups.flatMap((g) => [h('button', {
       type: 'button', class: 'group-item', 'aria-current': g.id === S.gid ? 'true' : 'false',
       onclick: () => selectGroup(g.id),
     },
     h('span', { class: 'g-name' }, g.running ? h('span', { class: 'g-live', title: '正在发言' }) : null, g.name),
     h('span', { class: 'g-time' }, fmtAgo(g.updated)),
-    h('span', { class: 'g-preview' }, g.preview || '还没有消息'))));
+    h('span', { class: 'g-preview' }, g.preview || '还没有消息')),
+    ...(g.error ? [h('button', { type: 'button', class: 'group-archive', 'data-archive-gid': g.id,
+      onclick: () => confirmArchiveGroup(g) }, '移到 archive（保留原文件）')] : [])]));
   }
 
   // ------------------------------------------------------------ 打开一个群
@@ -1709,17 +1711,26 @@
   }
 
   function confirmDeleteGroup() {
+    if (S.group) confirmArchiveGroup(S.group);
+  }
+
+  function confirmArchiveGroup(group) {
+    const gid = group.id;
     openModal({
-      title: '删除「' + S.group.name + '」？',
-      body: [h('p', {}, '群会移到数据目录下的 archive 文件夹，不会彻底删除；需要时可以手动找回。')],
+      title: '归档「' + group.name + '」？',
+      body: [h('p', {}, '群会移到数据目录下的 archive 文件夹，保留原文件，不会彻底删除；需要时可以手动找回。')],
       actions: [{ label: '取消' }, {
-        label: '删除', danger: true,
+        label: group.error ? '移到 archive' : '删除', danger: true,
         onClick: async () => {
-          await api('DELETE', '/api/groups/' + S.gid);
-          S.gid = null;
+          await api('DELETE', '/api/groups/' + gid);
+          const wasCurrent = S.gid === gid;
+          if (wasCurrent) showWelcome();
           await refreshGroups();
-          if (S.groups.length) await selectGroup(S.groups[0].id); else showWelcome();
-          toast('已删除');
+          if (wasCurrent) {
+            const next = S.groups.find(g => !g.error);
+            if (next) await selectGroup(next.id);
+          }
+          toast('已归档，原文件已保留');
         },
       }],
     });

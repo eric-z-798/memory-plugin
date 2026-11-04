@@ -447,7 +447,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_delete_group(self, gid, body):
         self._need_group(gid)
-        self.app.engine.runner(gid).stop()
+        self.app.engine.stop_existing(gid)
         self.app.store.archive_group(gid)
         self.send_json(200, {"ok": True})
 

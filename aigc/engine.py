@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import copy
+import sys
 import threading
 import traceback
 from collections import deque
@@ -172,6 +173,15 @@ class GroupRunner:
             message.update(incomplete=True, retry_member=retry_member, task=task)
         self.store.append_message(self.gid, message)
 
+    def _saved_warning(self, text: str) -> None:
+        try:
+            self._system(text, subtle=True)
+        except Exception:
+            # A second storage failure must not turn durable output into a retry.
+            # The console retains the warning when disk storage is unavailable.
+            print(text, file=sys.stderr)
+            traceback.print_exc()
+
     def _select_model(self, member, group, settings, task, query, prompt):
         # Freeze host choices for the whole round, including peer review and summary.
         if self._routing_snapshot is not None:
@@ -286,6 +296,7 @@ class GroupRunner:
             self._system("%s 已暂停，本轮跳过；其评审仍待补充。可在模型设置中恢复。" % name_of(member), subtle=True)
             return False
         start = now()
+        message = None
         with self._lock:
             self._speaking[member] = start
         try:
@@ -393,13 +404,22 @@ class GroupRunner:
                                 idempotency_key="%s:%s:memory:%s" % (self.gid, message["id"], index))
                         except MemoryError as exc:
                             self._system("%s 的一条候选记忆未保存：%s" % (name_of(member), exc), subtle=True)
-            progress = self.store.complete_member_context(self.gid, member, seen_seq, context_state.get("deferred_from"))
-            with self._lock:
-                self.seen[member] = progress["seen"]
+            try:
+                progress = self.store.complete_member_context(self.gid, member, seen_seq, context_state.get("deferred_from"))
+            except Exception as exc:
+                self._saved_warning("%s 的回复已保存为 #%s；已读进度未保存，下一轮可能重复提供未读全文：%s" % (name_of(member), message["seq"], exc))
+            else:
+                with self._lock:
+                    self.seen[member] = progress["seen"]
             return True
-        except StoreError:
-            raise
         except Exception as exc:
+            if message is not None:
+                # Durable output is not a failed model call. Do not offer a retry
+                # that would duplicate the reply or its committed side effects.
+                self._saved_warning("%s 的回复已保存为 #%s，但后续保存未完成，请核对看板、候选记忆和已读进度：%s" % (name_of(member), message["seq"], exc))
+                return True
+            if isinstance(exc, StoreError):
+                raise
             if not cancel.cancelled:
                 self._failed_members.add(member)
             self._system("%s 这次未完成：%s" % (name_of(member), exc), retry_member=member, task=task)
@@ -581,13 +601,14 @@ class Engine:
             self.availability.pause(member, kind, "CLI 报告额度不足或限流，已暂停新调用。请核对账号额度，恢复后手动启用；切换模型不保证恢复额度。")
 
     def post_user_message(self, gid: str, text: str) -> dict:
-        msg = self.store.append_message(gid, {"kind": "user", "author": "user", "text": text})
         mentioned = parse_mentions(text)
-        members = self.store.load_group(gid).get("members", [])
-        for member in members:
-            if not mentioned or member in mentioned:
-                self.store.begin_member_context(gid, member, msg["seq"])
-        self.runner(gid).submit({
+        # Resolve the runner before committing a message: loading progress may fail.
+        runner = self.runner(gid)
+        with self.store.lock(gid):
+            members = self.store.load_group(gid).get("members", [])
+            targets = [m for m in members if not mentioned or m in mentioned]
+            msg = self.store.append_user_message(gid, text, targets)
+        runner.submit({
             "type": "round", "participants": list(mentioned) if mentioned else None,
             "mentioned": list(mentioned or []), "task": "mention" if mentioned else "reply",
             "trigger": msg["seq"],
@@ -597,8 +618,14 @@ class Engine:
     def continue_discussion(self, gid: str) -> None:
         self.runner(gid).submit({"type": "round", "participants": None, "task": "continue", "trigger": None})
 
+    def stop_existing(self, gid: str) -> bool:
+        """Stop only an existing runner; safe even when group files are corrupt."""
+        with self._lock:
+            runner = self._runners.get(gid)
+        return runner.stop() if runner is not None else False
+
     def stop(self, gid: str) -> bool:
-        busy = self.runner(gid).stop()
+        busy = self.stop_existing(gid)
         if busy:
             self.store.append_message(gid, {"kind": "system", "author": "system", "text": "群主停止了本轮发言。"})
         return busy

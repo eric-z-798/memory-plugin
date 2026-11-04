@@ -167,7 +167,7 @@ class R2Engine(unittest.TestCase):
         source=next(m for m in self.store.messages(self.gid) if m['seq']==b['decisions'][0]['seq'])
         self.assertEqual(source['author'],'claude');self.assertEqual(source['kind'],'chat')
 
-    def test_q_board_failure_keeps_durable_message_and_retry(self):
+    def test_q_board_failure_keeps_durable_message_without_duplicate_retry(self):
         self.engine.update_group(self.gid,{'auto_rounds':0})
         self.reg.behaviors['claude']=lambda p:'synthetic'+test_engine.status(need_user='approval')
         save=self.store.save_board;failed=[]
@@ -178,8 +178,10 @@ class R2Engine(unittest.TestCase):
             self.engine.post_user_message(self.gid,'@claude test');self.wait()
         self.assertTrue(any(m['kind']=='chat' for m in self.store.messages(self.gid)))
         self.assertFalse(self.store.load_board(self.gid)['need_user'])
-        self.engine.retry_member(self.gid,'claude');self.wait()
-        self.assertEqual(len(self.store.load_board(self.gid)['need_user']),1)
+        self.assertNotIn('claude',self.engine.incomplete_members(self.gid))
+        with self.assertRaises(ValueError):self.engine.retry_member(self.gid,'claude')
+        self.assertEqual(sum(m['kind']=='chat' for m in self.store.messages(self.gid)),1)
+        self.assertTrue(any('后续保存未完成' in m['text'] for m in self.store.messages(self.gid)))
 
     def test_q_partial_write_reserves_identity_before_retry(self):
         import builtins
@@ -212,7 +214,7 @@ class R2Engine(unittest.TestCase):
         self.assertEqual(message['kind'],'chat')
         self.assertEqual(Store(Path(self.tmp)).messages(self.gid),self.store.messages(self.gid))
 
-    def test_q_retry_after_candidate_failure_deduplicates_notes_and_needs(self):
+    def test_q_candidate_failure_preserves_notes_and_needs_without_retry(self):
         self.engine.update_group(self.gid,{'auto_rounds':0})
         b=self.store.load_board(self.gid)
         board.apply_status(b,'claude',{'propose_tasks':[{'title':'task','owner':'claude'}]},['claude'],1)
@@ -221,7 +223,9 @@ class R2Engine(unittest.TestCase):
         self.reg.behaviors['claude']=lambda p:'synthetic'+response
         with patch.object(self.store.memory,'add',side_effect=OSError('synthetic candidate failure')):
             self.engine.post_user_message(self.gid,'@claude test');self.wait()
-        self.engine.retry_member(self.gid,'claude');self.wait()
+        self.assertNotIn('claude',self.engine.incomplete_members(self.gid))
+        with self.assertRaises(ValueError):self.engine.retry_member(self.gid,'claude')
+        self.assertEqual(sum(m['kind']=='chat' for m in self.store.messages(self.gid)),1)
         b=self.store.load_board(self.gid)
         self.assertEqual(len(b['need_user']),1)
         self.assertEqual(len(b['tasks'][0]['notes']),1)
