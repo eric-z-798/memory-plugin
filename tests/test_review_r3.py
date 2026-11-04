@@ -1,6 +1,7 @@
 """U: durable successful boundaries and bounded unread context; synthetic adapters only."""
 import sys
 import time
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -63,6 +64,39 @@ class ContextProgress(unittest.TestCase):
         self.restart()
         self.engine.post_user_message(self.gid,'follow the earlier request');self.wait()
         for m in ('claude','gpt','gemini'):self.assertIn(text,member_prompt(self.reg,m))
+
+    def test_queued_merged_triggers_survive_summary_advancement(self):
+        self.engine.update_group(self.gid, {'members': ['claude'], 'auto_rounds': 0})
+        entered, release = threading.Event(), threading.Event()
+        snapshots = []
+
+        def respond(prompt):
+            if '书记员' in prompt:
+                return 'synthetic summary'
+            snapshots.append((prompt, self.store.load_board(self.gid)['summary_upto']))
+            if len(snapshots) == 1:
+                entered.set()
+                if not release.wait(10):
+                    raise MemberError('test release timed out')
+            return 'synthetic reply' + test_engine.status()
+
+        self.reg.behaviors['claude'] = respond
+        self.engine.post_user_message(self.gid, 'first request')
+        try:
+            self.assertTrue(entered.wait(3))
+            requests = [f'QUEUED_{i:02d}_' + '甲' * 2980 + f'_TAIL_{i:02d}' for i in range(30)]
+            for text in requests:
+                self.engine.post_user_message(self.gid, text)
+            self.assertEqual(self.engine.state(self.gid)['queued'], 1)
+        finally:
+            release.set()
+        self.wait()
+        self.assertEqual(len(snapshots), 2)
+        prompt, summary_upto = snapshots[1]
+        self.assertGreater(summary_upto, 2, 'the first round must summarize queued requests before execution')
+        for text in requests:
+            self.assertIn(text, full(prompt))
+        self.assertIn('本轮触发消息及必需上下文本身超过60000', prompt)
 
     def seed_backlog(self):
         self.engine.update_group(self.gid,{'members':['claude'],'auto_rounds':0})

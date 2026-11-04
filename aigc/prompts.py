@@ -104,9 +104,10 @@ def build_member_prompt(group: dict, board: dict, messages: List[dict], member: 
     if trigger_seq is None:
         trigger_seq = next((m["seq"] for m in reversed(eligible) if m.get("author") == "user"), 0)
     summary_upto = board.get("summary_upto", 0)
-    users = [m for m in eligible if m.get("author") == "user" and m.get("seq", 0) > summary_upto]
+    users = [m for m in eligible if m.get("author") == "user"]
     # Every instruction in the current (possibly merged) job remains mandatory.
-    # Only older unread messages form the bounded backlog.
+    # Summary may advance over queued triggers before their job starts.
+    # Apply its floor only to older unread backlog, never to the current job.
     current = [m for m in users if m["seq"] >= trigger_seq]
     lower = seen_seq + 1 if seen_seq is not None else trigger_seq
     if unread_from is not None:
