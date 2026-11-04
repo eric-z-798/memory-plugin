@@ -14,6 +14,7 @@ from . import board as board_mod
 from .common import clip, fmt_time, name_of
 
 MESSAGE_CLIP = 2500
+MEMBER_CONTEXT_TARGET = 60000
 SUMMARY_BATCH_TARGET = 60000
 # A 20,000-character accepted message can expand sixfold in JSON.
 SUMMARY_BUDGET = 160000
@@ -86,7 +87,8 @@ def recent_messages(messages: List[dict], board: dict, window: int, batch: int,
 def build_member_prompt(group: dict, board: dict, messages: List[dict], member: str, task: str,
                         settings: dict, upto_seq: Optional[int] = None, extra: str = "",
                         memory_context: Optional[dict] = None, trigger_seq: Optional[int] = None,
-                        seen_seq: Optional[int] = None) -> str:
+                        seen_seq: Optional[int] = None, unread_from: Optional[int] = None,
+                        context_state: Optional[dict] = None) -> str:
     members = group.get("members", [])
     name = name_of(member)
     limit = REPLY_LENGTHS.get(group.get("reply_length", "medium"), 600)
@@ -101,13 +103,21 @@ def build_member_prompt(group: dict, board: dict, messages: List[dict], member: 
     eligible = [m for m in messages if upto_seq is None or m.get("seq", 0) <= upto_seq]
     if trigger_seq is None:
         trigger_seq = next((m["seq"] for m in reversed(eligible) if m.get("author") == "user"), 0)
-    if seen_seq is not None:
-        unread = next((m["seq"] for m in eligible if m.get("author") == "user" and m["seq"] > seen_seq), trigger_seq)
-        trigger_seq = min(trigger_seq, unread)
-    current = [m for m in eligible if m.get("author") == "user" and m.get("seq", 0) >= trigger_seq]
+    summary_upto = board.get("summary_upto", 0)
+    users = [m for m in eligible if m.get("author") == "user" and m.get("seq", 0) > summary_upto]
+    # Every instruction in the current (possibly merged) job remains mandatory.
+    # Only older unread messages form the bounded backlog.
+    current = [m for m in users if m["seq"] >= trigger_seq]
+    lower = seen_seq + 1 if seen_seq is not None else trigger_seq
+    if unread_from is not None:
+        lower = min(lower, unread_from)
+    lower = max(summary_upto + 1, lower)
     current_ids = {m["seq"] for m in current}
-    recent = [m for m in recent if m["seq"] not in current_ids]
-    omitted = [m for m in eligible if m.get("kind") in ("chat", "user") and m["seq"] > board.get("summary_upto", 0) and m["seq"] not in current_ids and m not in recent]
+    candidates = [m for m in users if m["seq"] >= lower and m["seq"] not in current_ids]
+    candidate_ids = {m["seq"] for m in candidates}
+    recent = [m for m in recent if m["seq"] not in current_ids | candidate_ids]
+    omitted = [m for m in eligible if m.get("kind") in ("chat", "user") and m["seq"] > summary_upto
+               and m["seq"] not in current_ids | candidate_ids and m not in recent]
     parts = [
         "你是 %s，正在参加一个群聊。群里有一位群主（真人，最终拍板的人）和 AI 成员 Claude、GPT、Gemini，"
         "目前在群的 AI 是：%s。" % (name, _member_list(members)),
@@ -155,7 +165,35 @@ def build_member_prompt(group: dict, board: dict, messages: List[dict], member: 
         "",
         STATUS_GUIDE,
     ]
-    return "\n".join(parts)
+    history_index = parts.index("## 最近的聊天记录") + 1
+    full_index = parts.index("## 本轮群主消息（全文，不计入历史预算）") + 1
+    parts[history_index] = ""
+    reserve = 500  # Explicit omission notices, including message IDs.
+    fixed = len("\n".join(parts))
+    # Unread user instructions take precedence over already-read/AI history.
+    remaining = max(0, MEMBER_CONTEXT_TARGET - fixed - reserve)
+    chosen = []
+    for message in candidates:
+        size = len(format_messages([message], full_user=True)) + 2
+        if size > remaining:
+            break
+        chosen.append(message)
+        remaining -= size
+    deferred = candidates[len(chosen):]
+    current = sorted(current + chosen, key=lambda m: m["seq"])
+    parts[full_index] = format_messages(current, full_user=True)
+    parts[history_index] = _bounded_messages(recent, member,
+        budget=min(20000, max(0, MEMBER_CONTEXT_TARGET - len("\n".join(parts)) - reserve)))
+    if deferred:
+        parts[full_index] += "\n（未读全文预算不足：%d 条未完整载入，起于 #%d；原文保留，成功后仍保留待载入起点，后续按批次继续。）" % (len(deferred), deferred[0]["seq"])
+    if omitted:
+        parts[history_index] = "（还有 %d 条尚未摘要的历史消息未载入；原文保留，摘要进度未覆盖这些消息。）\n" % len(omitted) + parts[history_index]
+    if context_state is not None:
+        context_state["deferred_from"] = deferred[0]["seq"] if deferred else None
+    result = "\n".join(parts)
+    if len(result) > MEMBER_CONTEXT_TARGET:
+        result += "\n（本轮触发消息及必需上下文本身超过60000字符目标，触发正文仍完整提供；未额外扩大全文预算。）"
+    return result
 
 
 def _bounded_messages(messages: List[dict], member: str, budget: int = 20000) -> str:

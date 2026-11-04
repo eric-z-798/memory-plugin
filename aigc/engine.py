@@ -49,7 +49,7 @@ def parse_mentions(text: str) -> Optional[List[str]]:
 
 
 class GroupRunner:
-    def __init__(self, engine: "Engine", gid: str):
+    def __init__(self, engine: "Engine", gid: str, progress: dict):
         self.engine = engine
         self.store = engine.store
         self.gid = gid
@@ -61,7 +61,7 @@ class GroupRunner:
         self._phase = ""
         self._since = 0.0
         # 每位成员最近一次成功发言时看到的最后一条消息编号，用来避免重复发言
-        self.seen: dict = {}
+        self.seen: dict = {m: entry["seen"] for m, entry in progress.items() if "seen" in entry}
         self._memory_context: dict = {}
         self._routing_snapshot = None
         self._paused_at_round_start = set()
@@ -294,8 +294,12 @@ class GroupRunner:
             board = frozen["board"] if frozen else self.store.load_board(self.gid)
             msgs = frozen["messages"] if frozen else self.store.messages(self.gid)
             seen_seq = upto_seq if upto_seq is not None else (msgs[-1]["seq"] if msgs else 0)
+            trigger = self._trigger_seq or next((m["seq"] for m in reversed(msgs) if m.get("author") == "user"), 0)
+            progress = self.store.begin_member_context(self.gid, member, trigger)
+            context_state = {}
             prompt = prompts.build_member_prompt(group, board, msgs, member, task, settings, upto_seq,
-                                                  memory_context=self._memory_context, trigger_seq=self._trigger_seq, seen_seq=self.seen.get(member, 0))
+                memory_context=self._memory_context, trigger_seq=self._trigger_seq,
+                seen_seq=progress.get("seen"), unread_from=progress.get("unread_from"), context_state=context_state)
             route = None
             try:
                 query = next((m.get("text", "") for m in reversed(msgs) if m.get("kind") == "user"), "")
@@ -389,8 +393,9 @@ class GroupRunner:
                                 idempotency_key="%s:%s:memory:%s" % (self.gid, message["id"], index))
                         except MemoryError as exc:
                             self._system("%s 的一条候选记忆未保存：%s" % (name_of(member), exc), subtle=True)
+            progress = self.store.complete_member_context(self.gid, member, seen_seq, context_state.get("deferred_from"))
             with self._lock:
-                self.seen[member] = max(self.seen.get(member, 0), seen_seq)
+                self.seen[member] = progress["seen"]
             return True
         except StoreError:
             raise
@@ -530,8 +535,14 @@ class Engine:
 
     def runner(self, gid: str) -> GroupRunner:
         with self._lock:
+            existing = self._runners.get(gid)
+        if existing is not None:
+            return existing
+        # Never hold the global runner lock while acquiring a group storage lock.
+        progress = self.store.member_context(gid)
+        with self._lock:
             if gid not in self._runners:
-                self._runners[gid] = GroupRunner(self, gid)
+                self._runners[gid] = GroupRunner(self, gid, progress)
             return self._runners[gid]
 
     def state(self, gid: str) -> dict:
@@ -572,6 +583,10 @@ class Engine:
     def post_user_message(self, gid: str, text: str) -> dict:
         msg = self.store.append_message(gid, {"kind": "user", "author": "user", "text": text})
         mentioned = parse_mentions(text)
+        members = self.store.load_group(gid).get("members", [])
+        for member in members:
+            if not mentioned or member in mentioned:
+                self.store.begin_member_context(gid, member, msg["seq"])
         self.runner(gid).submit({
             "type": "round", "participants": list(mentioned) if mentioned else None,
             "mentioned": list(mentioned or []), "task": "mention" if mentioned else "reply",
@@ -620,8 +635,10 @@ class Engine:
         for member in group.get("members", []):
             if member not in MEMBER_ORDER:
                 continue
+            progress = self.store.member_context(gid).get(member, {})
             prompt = (prompts.build_summary_prompt(group, board, prompts.bounded_summary_messages(group, board, messages), member) if task == "summary" else
-                      prompts.build_member_prompt(group, board, messages, member, task, settings, memory_context=memory, seen_seq=self._runners[gid].seen.get(member, 0) if gid in self._runners else 0))
+                      prompts.build_member_prompt(group, board, messages, member, task, settings, memory_context=memory,
+                          seen_seq=progress.get("seen"), unread_from=progress.get("unread_from")))
             try:
                 routes[member] = resolve_route(member, settings, group, task, text, context_chars=len(prompt))
             except ValueError as exc:

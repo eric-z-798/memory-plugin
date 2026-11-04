@@ -37,6 +37,8 @@ with tempfile.TemporaryDirectory(prefix='xingshu-r1-') as data:
                 if not api('GET',f'/api/groups/{g}')['state']['running']: break
                 time.sleep(.1)
             page.goto(base+'/#'+g)
+            expect(page.locator('#composer')).to_have_attribute('aria-busy','false')
+            expect(page.locator('#input')).to_be_editable()
             # The actual mention button inserts directly after Chinese text.
             before_messages=api('GET',f'/api/groups/{g}')['messages']
             before_seq=max(m['seq'] for m in before_messages)

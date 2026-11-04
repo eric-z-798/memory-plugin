@@ -17,6 +17,7 @@
 
   const S = {
     info: {}, groups: [], gid: null, group: null, board: null, rev: -1,
+    loadEpoch: 0, loading: false, sending: new Set(), draftVersions: new Map(),
     seqs: new Set(), lastSeq: 0, state: { running: false, speaking: [] }, offset: 0,
     members: null, modelAvailability: {}, modelQuota: {}, pollTimer: null, online: true, effective: null, tab: 'chat',
     forceScroll: false, openFolds: new Set(['dec-closed']), menu: null, modalReturn: null, hasChat: false,
@@ -438,6 +439,21 @@
   }
 
   // ------------------------------------------------------------ 打开一个群
+  function composerControls() {
+    const ready = !!S.group && !S.loading && $('#input').dataset.gid === S.gid;
+    $('#input').readOnly = !ready;
+    $('#input').placeholder = S.loading ? '正在加载群聊，请稍候…' : '告诉 AI 伙伴，你想一起解决什么…';
+    $('#composer').setAttribute('aria-busy', S.loading ? 'true' : 'false');
+    $('#btn-send').disabled = !ready || S.sending.has(S.gid);
+    $('#mention-row').querySelectorAll('.at-btn').forEach(b => { b.disabled = !ready; });
+  }
+
+  function draftChanged() {
+    const gid = $('#input').dataset.gid;
+    if (gid) S.draftVersions.set(gid, (S.draftVersions.get(gid) || 0) + 1);
+    saveDraft();
+  }
+
   function showChrome(inGroup) {
     $('#btn-memory-side').disabled = !inGroup;
     $('#chat-head').hidden = !inGroup;
@@ -445,6 +461,7 @@
     $('#stream-wrap').hidden = !inGroup;
     $('#composer').hidden = !inGroup;
     $('#welcome').hidden = inGroup;
+    composerControls();
     if (!inGroup) {
       $('#typing').hidden = true;
       setTab('chat');
@@ -452,6 +469,10 @@
   }
 
   function showWelcome() {
+    saveDraft();
+    S.loadEpoch++;
+    S.loading = false;
+    delete $('#input').dataset.gid;
     S.gid = null;
     S.group = null;
     S.board = null;
@@ -468,6 +489,12 @@
     if (S.gid === gid && S.group) return;
     clearTimeout(S.pollTimer);
     saveDraft();
+    const epoch = ++S.loadEpoch;
+    S.loading = true;
+    const input = $('#input');
+    input.dataset.gid = gid;
+    input.value = store('aigc.draft.' + gid) || '';
+    autosize();
     Object.assign(S, {
       gid, group: null, board: null, rev: -1, seqs: new Set(), lastSeq: 0, effective: null, hasChat: false,
       state: { running: false, speaking: [] }, forceScroll: true,
@@ -482,11 +509,19 @@
     try {
       d = await api('GET', '/api/groups/' + gid);
     } catch (e) {
+      if (S.gid !== gid || S.loadEpoch !== epoch) return;
+      S.loading = false;
+      composerControls();
+      $('#stream-inner').replaceChildren(h('p', { class: 'meta' }, '加载失败，请重新选择此群重试；草稿已保留。'));
       toast(e.message, true);
-      if (e.status === 404) { await refreshGroups(); showWelcome(); }
+      if (e.status === 404) {
+        await refreshGroups();
+        if (S.gid === gid && S.loadEpoch === epoch) showWelcome();
+      }
       return;
     }
-    if (S.gid !== gid) return;
+    if (S.gid !== gid || S.loadEpoch !== epoch) return;
+    S.loading = false;
     S.group = d.group;
     S.board = d.board;
     S.rev = d.board.rev || 0;
@@ -497,8 +532,7 @@
     $('#stream-inner').replaceChildren();
     appendMessages(d.messages);
     if (!d.messages.length) renderEmptyChat();
-    const input = $('#input');
-    input.value = store('aigc.draft.' + gid) || '';
+    composerControls();
     autosize();
     renderHeader();
     renderBoard();
@@ -520,22 +554,22 @@
   }
 
   async function poll() {
-    const gid = S.gid;
+    const gid = S.gid, epoch = S.loadEpoch;
     if (!gid) return;
     let next = S.state.running ? 1200 : 3500;
     const availabilitySnapshot = availabilityEpochSnapshot();
     try {
       const d = await api('GET', '/api/groups/' + gid + '/poll?after=' + S.lastSeq + '&rev=' + S.rev);
-      if (gid !== S.gid) return;
+      if (gid !== S.gid || epoch !== S.loadEpoch) return;
       setOnline(true);
       applyPoll(d, availabilitySnapshot);
       next = S.state.running ? 1200 : 3500;
     } catch (e) {
-      if (gid !== S.gid) return;
+      if (gid !== S.gid || epoch !== S.loadEpoch) return;
       if (e.status === 404) {
         toast('这个群已经不在了', true);
         await refreshGroups();
-        showWelcome();
+        if (gid === S.gid && epoch === S.loadEpoch) showWelcome();
         return;
       }
       if (e.network) setOnline(false);
@@ -1389,23 +1423,33 @@
   }
 
   function saveDraft() {
-    if (!S.gid) return;
-    const v = $('#input').value;
-    store('aigc.draft.' + S.gid, v.trim() ? v : null);
+    const input = $('#input');
+    const gid = input.dataset.gid;
+    if (!gid) return;
+    store('aigc.draft.' + gid, input.value.trim() ? input.value : null);
   }
 
   async function send(e) {
     if (e) e.preventDefault();
     const input = $('#input');
-    const text = input.value.trim();
-    if (!text || !S.gid) return;
-    const btn = $('#btn-send');
-    btn.disabled = true;
+    const gid = S.gid, raw = input.value, text = raw.trim();
+    if (!text || !gid || !S.group || S.loading || input.dataset.gid !== gid || S.sending.has(gid)) return;
+    saveDraft();
+    const version = S.draftVersions.get(gid) || 0;
+    S.sending.add(gid);
+    composerControls();
     try {
-      const d = await api('POST', '/api/groups/' + S.gid + '/messages', { text });
-      input.value = '';
-      autosize();
-      store('aigc.draft.' + S.gid, null);
+      const d = await api('POST', '/api/groups/' + gid + '/messages', { text });
+      // A response belongs to its captured group and draft revision, never the
+      // currently selected group's input or a newer edit of this same draft.
+      if ((S.draftVersions.get(gid) || 0) === version) {
+        if (store('aigc.draft.' + gid) === raw) store('aigc.draft.' + gid, null);
+        if (input.dataset.gid === gid && input.value === raw) {
+          input.value = '';
+          autosize();
+        }
+      }
+      if (S.gid !== gid || S.loading || !S.group) return;
       S.forceScroll = true;
       S.state = Object.assign({}, S.state, { running: true });
       renderTyping();
@@ -1414,8 +1458,9 @@
     } catch (err) {
       toast(err.message, true);
     } finally {
-      btn.disabled = false;
-      input.focus();
+      S.sending.delete(gid);
+      composerControls();
+      if (S.gid === gid && !S.loading) input.focus();
     }
   }
 
@@ -2666,7 +2711,7 @@
       if (b) setTab(b.dataset.tab);
     });
     const input = $('#input');
-    input.addEventListener('input', () => { autosize(); });
+    input.addEventListener('input', () => { draftChanged(); autosize(); });
     input.addEventListener('blur', saveDraft);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
@@ -2676,12 +2721,13 @@
     });
     $('#mention-row').addEventListener('click', (e) => {
       const b = e.target.closest('[data-at]');
-      if (!b) return;
+      if (!b || b.disabled || S.loading || !S.group) return;
       const at = '@' + b.dataset.at + ' ';
       const start = input.selectionStart || 0;
       input.value = input.value.slice(0, start) + at + input.value.slice(input.selectionEnd || start);
       input.focus();
       input.selectionStart = input.selectionEnd = start + at.length;
+      draftChanged();
       autosize();
     });
     const stream = $('#stream');

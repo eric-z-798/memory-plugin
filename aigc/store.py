@@ -281,6 +281,46 @@ class Store:
             group["updated"] = now()
             atomic_write_json(gdir / "group.json", group)
 
+    def member_context(self, gid: str) -> dict:
+        """Successful boundary and explicitly deferred full-text start per member."""
+        raw = self.load_group(gid).get("member_context", {})
+        result = {}
+        high = max((m["seq"] for m in self.messages(gid)), default=0) if raw else 0
+        for member in ("claude", "gpt", "gemini"):
+            entry = raw.get(member, {}) if isinstance(raw, dict) else {}
+            if not isinstance(entry, dict):
+                continue
+            values = {k: v for k, v in entry.items() if k in ("seen", "unread_from")
+                      and type(v) is int and 0 < v <= min(MAX_MESSAGE_SEQ, high)}
+            if values:
+                result[member] = values
+        return result
+
+    def begin_member_context(self, gid: str, member: str, trigger: int) -> dict:
+        # A first-request anchor is NOT a successful acknowledgement.
+        with self.lock(gid):
+            progress = self.member_context(gid)
+            entry = progress.setdefault(member, {})
+            if not entry and trigger > 0:
+                entry["unread_from"] = trigger
+                group = self.load_group(gid)
+                group["member_context"] = progress
+                self.save_group(group)
+            return dict(entry)
+
+    def complete_member_context(self, gid: str, member: str, seen: int, deferred: Optional[int]) -> dict:
+        with self.lock(gid):
+            progress = self.member_context(gid)
+            entry = progress.setdefault(member, {})
+            entry["seen"] = max(entry.get("seen", 0), seen)
+            entry.pop("unread_from", None)
+            if deferred is not None:
+                entry["unread_from"] = deferred
+            group = self.load_group(gid)
+            group["member_context"] = progress
+            self.save_group(group)
+            return dict(entry)
+
     def list_groups(self) -> List[dict]:
         result = []
         for gdir in self.groups_dir.iterdir():
