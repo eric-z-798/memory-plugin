@@ -1277,6 +1277,7 @@
 
   function commentItem(item) {
     const text = textarea('', '比如：预算要控制在一万以内；或者：这条先不做，原因是……', 4);
+    text.maxLength = 1000;
     const respond = check('提交后让在群的 AI 先回应你的意见（推荐）', true);
     openModal({
       title: '对 ' + item.id + ' 提意见',
@@ -1294,6 +1295,7 @@
 
   function editItemText(item) {
     const text = textarea(item.text || item.title, '', 4);
+    text.maxLength = 600;
     openModal({
       title: '修改 ' + item.id,
       body: [field('内容', text, '只改文字，不改变状态和表态。改动会记在变更记录里。')],
@@ -1314,6 +1316,7 @@
 
   function editGoal() {
     const text = textarea(S.board.goal, '想达成什么？范围、约束、完成标准……', 6);
+    text.maxLength = 2000;
     const respond = check('保存后让在群的 AI 看一下新目标并回应', false);
     openModal({
       title: '群目标',
@@ -1327,6 +1330,7 @@
 
   function addDecision() {
     const text = textarea('', '比如：第一版只支持网页端，移动端放到第二版', 4);
+    text.maxLength = 600;
     const respond = check('添加后让在群的 AI 回应', false);
     openModal({
       title: '添加决议',
@@ -1344,8 +1348,10 @@
 
   function addTask() {
     const title = textInput('', '比如：整理三家竞品的定价');
+    title.maxLength = 300;
     const owner = select(MEMBERS.map((m) => [m, NAMES[m]]).concat([['user', '群主（我自己）'], ['unassigned', '未指定']]), S.group.members[0] || 'unassigned');
     const deliverable = textInput('', '比如：一页对比表');
+    deliverable.maxLength = 300;
     const respond = check('添加后让在群的 AI 回应', false);
     openModal({
       title: '分配任务',
@@ -1363,6 +1369,7 @@
 
   function replyNeed(n) {
     const text = textarea('', '你的回复会发到群里', 4);
+    text.maxLength = 1000;
     const respond = check('发出后让在群的 AI 继续讨论', true);
     openModal({
       title: '回复 ' + (NAMES[n.member] || n.member),
@@ -1595,9 +1602,11 @@
   function openNewGroup() {
     const name = textInput('', '比如：我的新项目');
     const goal = textarea('', '想达成什么？写清楚目标、范围和约束，三家会围绕它讨论', 4);
+    goal.maxLength = 2000;
     const seats = seatPicker(MEMBERS);
     const mode = segPicker([['sequential', '一起讨论'], ['parallel', '先独立思考']], 'sequential');
     const first = textarea('', '比如：帮我比较这两个方案，先分析各自优缺点。也可以稍后再发。', 4);
+    first.maxLength = 20000;
     const project = projectPicker('', '');
     openModal({
       title: '新建群聊',
@@ -1854,7 +1863,7 @@
     const kind = select(Object.entries(MEMORY_KINDS), memory ? memory.kind : 'note');
     const scope = select([['project', '当前项目'], ['global', '全局 · 所有项目']], memory && memory.project_id === '*' ? 'global' : 'project');
     scope.disabled = !!memory;
-    const confirmed = check('我已核实，允许三家在后续对话中引用', confirmCandidate || !memory || memory.status === 'confirmed');
+    const confirmed = check('我已核实，允许三家在后续对话中引用', confirmCandidate || (memory ? memory.status === 'confirmed' : !message || message.author === 'user'));
     const conflict = h('div', { class: 'memory-conflict', hidden: true, role: 'alert' });
     let version = memory && memory.version;
     let conflictUnresolved = false;

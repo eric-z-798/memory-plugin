@@ -54,7 +54,7 @@
 .atlas-node-label { position:absolute; top:41px; left:50%; transform:translateX(-50%); display:none; width:max-content; max-width:155px; padding:3px 7px; border:1px solid #38475f; border-radius:5px; background:#0a1323f5; color:#e0e9f6; font-size:10px; line-height:1.5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .atlas-node[aria-pressed="true"] .atlas-node-label,.atlas-node:hover .atlas-node-label,.atlas-node:focus-visible .atlas-node-label { display:block; }
 .atlas-node[aria-pressed="true"] { z-index:3; }
-.atlas-zoom { position:absolute; bottom:12px; right:14px; display:flex; align-items:center; gap:3px; padding:3px; background:#0d1726ed; border:1px solid #29364c; border-radius:10px; z-index:4; }
+.atlas-zoom { position:relative; width:max-content; margin:8px 14px 12px auto; display:flex; align-items:center; gap:3px; padding:3px; background:#0d1726ed; border:1px solid #29364c; border-radius:10px; z-index:4; }
 .atlas-control { border:0; background:none; color:#b4c4db; min-width:34px; height:34px; padding:0 7px; border-radius:7px; cursor:pointer; font-size:17px; }
 .atlas-control:last-child { font-size:11px; }
 .atlas-control:hover { background:#233249; }

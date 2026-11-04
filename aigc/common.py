@@ -66,6 +66,8 @@ def atomic_write_json(path: Path, data: Any) -> None:
     tmp = path.with_name(path.name + ".tmp")
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
     # Windows 上目标文件正被别的程序（例如杀毒软件）打开时会短暂替换失败，稍等重试
     for attempt in range(20):
         try:
@@ -77,18 +79,27 @@ def atomic_write_json(path: Path, data: Any) -> None:
             time.sleep(0.05)
 
 
-def read_json(path: Path, default: Any) -> Any:
+class CorruptJSON(ValueError):
+    pass
+
+
+def read_json(path: Path, default: Any, strict: bool = False) -> Any:
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
         return default
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         # 文件损坏时保留一份备份，再用默认值继续，不让整个程序起不来
         try:
-            os.replace(path, str(path) + ".broken")
+            import shutil
+            import uuid
+            backup = str(path) + ".broken-" + str(time.time_ns()) + "-" + uuid.uuid4().hex[:8]
+            shutil.copyfile(path, backup)
         except OSError:
             pass
+        if strict:
+            raise CorruptJSON("JSON 文件损坏，已尝试保留备份：%s" % path.name)
         return default
 
 

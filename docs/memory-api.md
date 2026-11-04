@@ -1,4 +1,4 @@
-# 记忆接口（0.2.0）
+# 记忆接口（0.5.0，R1 修复）
 
 应用仍只依赖 Python 标准库。`aigc.memory.MemoryStore` 可独立使用，不需要三家 CLI、模型 API 或网页服务。
 
@@ -56,3 +56,8 @@ scope 为 `project` 或 `global`。`source_seq` 省略时视为人工录入；�
 停止服务后备份整个数据目录，包含 JSON/JSONL 和 memory.sqlite3。恢复同样在停机状态进行。JSON 导出用于迁移与审阅，本版未提供 JSON 自动导入端点。
 
 删除记忆清除当前记录与记忆历史。原聊天、看板、已发送的第三方输入和独立备份不属于此删除操作；群聊源数据中的候选也保留作来源记录。完整遗忘需要另行处理这些源数据。
+
+
+R1 HTTP 来源默认值：`POST /api/groups/<gid>/memories` 未传 `status` 且 `source_seq` 指向非用户聊天作者时，默认 `pending`；显式传入 `confirmed` 表示用户主动确认。手动创建和用户消息默认 `confirmed` 不变。底层独立 `MemoryStore.add` 的默认值不变。
+
+删除记忆响应仍有 `ok`，另外返回 `warnings` 数组；某个群停止后的系统消息写入失败不会阻止继续停止其他相关群。删除、编辑和撤回的原有生效语义未调整。

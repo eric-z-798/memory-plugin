@@ -408,7 +408,10 @@ class Handler(BaseHTTPRequestHandler):
     def api_list_groups(self, body):
         groups = self.app.store.list_groups()
         for g in groups:
-            g["running"] = self.app.engine.state(g["id"])["running"]
+            try:
+                g["running"] = self.app.engine.state(g["id"])["running"] if not g.get("error") else False
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                g.update(running=False, error=str(exc))
         self.send_json(200, {"groups": groups})
 
     def api_create_group(self, body):
@@ -418,13 +421,16 @@ class Handler(BaseHTTPRequestHandler):
         project_id = body.get("project_id") or None
         if project_id is not None and not isinstance(project_id, str):
             raise HttpError(400, "项目编号不合法")
+        first = str(body.get("first_message") or "").strip()
+        if len(first) > MAX_MESSAGE or len(goal) > 2000:
+            raise HttpError(400, "首条消息最多 20000 字，群目标最多 2000 字")
         group = self.app.store.create_group(name, goal, members, str(body.get("mode") or "sequential"), project_id)
         extra = {k: body[k] for k in ("auto_rounds", "reply_length", "parallel_review") if k in body}
         if extra:
             group = self.app.engine.update_group(group["id"], extra)
         first = str(body.get("first_message") or "").strip()
         if first:
-            self.app.engine.post_user_message(group["id"], first[:MAX_MESSAGE])
+            self.app.engine.post_user_message(group["id"], first)
         self.send_json(201, {"group": group})
 
     def api_get_group(self, gid, body):
@@ -558,7 +564,7 @@ class Handler(BaseHTTPRequestHandler):
             source = {"group_id": gid, "seq": seq, "author": original["author"], "method": "selected"}
         item = self.app.store.memory.add("*" if scope == "global" else group["project_id"],
                     body.get("content", ""), kind=body.get("kind", "note"),
-                    status=body.get("status", "confirmed"), source=source)
+                    status=body.get("status", "confirmed" if source["author"] == "user" else "pending"), source=source)
         self.send_json(201, {"memory": item})
 
     def api_update_memory(self, gid, mid, body):
@@ -572,10 +578,15 @@ class Handler(BaseHTTPRequestHandler):
         # Delete atomically first so a new round cannot load the old memory while we cancel.
         self.app.store.memory.delete(mid, body.get("version"))
         # Already transmitted prompts cannot be recalled.
+        warnings = []
         for group in self.app.store.list_groups():
-            if item["project_id"] in ("*", group["project_id"]):
-                self.app.engine.stop(group["id"])
-        self.send_json(200, {"ok": True})
+            if group.get("error") or item["project_id"] in ("*", group["project_id"]):
+                try:
+                    self.app.engine.stop(group["id"])
+                except (OSError, ValueError, StoreError) as exc:
+                    # stop() cancels the runner before persisting its system message.
+                    warnings.append({"group_id": group["id"], "error": str(exc)})
+        self.send_json(200, {"ok": True, "warnings": warnings})
 
     def api_memory_history(self, gid, mid, body):
         self._scoped_memory(gid, mid)

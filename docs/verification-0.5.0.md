@@ -33,3 +33,6 @@ npm install --prefix /tmp/xingshu-domqa jsdom
 NODE_PATH=/tmp/xingshu-domqa/node_modules node tools/test_ui_dom.cjs
 python3 -m unittest discover -s tests -p test_server.py
 ```
+
+
+2026-11-04 Claude R1 修复的新增验证（266 项 Python、DOM、完整可运行 UI）独立记录于 [R1 验证](verification-r1-20261104.md)，不覆盖本文原始交付记录，也不表示真实 CLI 验收。

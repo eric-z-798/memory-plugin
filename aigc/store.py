@@ -16,6 +16,10 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import re
+import math
+import tempfile
 import shutil
 import threading
 import uuid
@@ -144,6 +148,8 @@ class Store:
 
     def create_group(self, name: str, goal: str = "", members: Optional[List[str]] = None,
                      mode: str = "sequential", project_id: Optional[str] = None) -> dict:
+        if len(goal.strip()) > 2000:
+            raise ValueError("群目标最多 2000 字")
         gid = "g-" + uuid.uuid4().hex[:10]
         if project_id and project_id not in {p["id"] for p in self.memory.projects()}:
             raise ValueError("找不到所选项目")
@@ -180,7 +186,7 @@ class Store:
 
     def load_group(self, gid: str) -> dict:
         with self.lock(gid):
-            group = read_json(self.group_dir(gid) / "group.json", None)
+            group = read_json(self.group_dir(gid) / "group.json", None, strict=True)
         if not group:
             raise StoreError("找不到这个群")
         group.setdefault("project_id", gid)
@@ -199,19 +205,23 @@ class Store:
         for gdir in self.groups_dir.iterdir():
             if not gdir.is_dir() or not valid_gid(gdir.name):
                 continue
-            group = read_json(gdir / "group.json", None)
-            if not group:
-                continue
-            msgs = self.messages(gdir.name)
-            last = next((m for m in reversed(msgs) if m.get("kind") in ("chat", "user")), None)
-            result.append({
-                "id": group["id"],
-                "project_id": group.get("project_id", group["id"]),
-                "name": group["name"],
-                "members": group.get("members", []),
-                "updated": max(group.get("updated", 0), last["ts"] if last else 0),
-                "preview": ((name_of(last.get("author", "")) + "：" + last.get("text", "")) if last else "")[:80],
-            })
+            try:
+                group = read_json(gdir / "group.json", None, strict=True)
+                if not isinstance(group, dict) or not group:
+                    raise ValueError("群设置缺失或损坏")
+                msgs = self.messages(gdir.name)
+                last = next((m for m in reversed(msgs) if m.get("kind") in ("chat", "user")), None)
+                result.append({
+                    "id": group["id"],
+                    "project_id": group.get("project_id", group["id"]),
+                    "name": group["name"],
+                    "members": group.get("members", []),
+                    "updated": max(group.get("updated", 0), last["ts"] if last else 0),
+                    "preview": ((name_of(last.get("author", "")) + "：" + last.get("text", "")) if last else "")[:80],
+                })
+            except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                result.append({"id": gdir.name, "project_id": gdir.name, "name": "群数据需要恢复",
+                               "members": [], "updated": 0, "preview": str(exc), "error": str(exc)})
         result.sort(key=lambda g: g["updated"], reverse=True)
         return result
 
@@ -228,7 +238,7 @@ class Store:
     # ---------- 看板 ----------
     def load_board(self, gid: str) -> dict:
         with self.lock(gid):
-            board = read_json(self.group_dir(gid) / "board.json", None)
+            board = read_json(self.group_dir(gid) / "board.json", None, strict=True)
         if board is None:
             board = board_mod.new_board()
         return board_mod.upgrade(board)
@@ -244,18 +254,56 @@ class Store:
     def messages(self, gid: str) -> List[dict]:
         with self.lock(gid):
             if gid not in self._messages:
-                msgs = []
+                msgs, bad, high = [], [], 0
                 path = self.group_dir(gid) / "messages.jsonl"
-                if path.exists():
-                    with open(path, encoding="utf-8") as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                msgs.append(json.loads(line))
-                            except json.JSONDecodeError:
-                                continue
+                raw = path.read_bytes() if path.exists() else b""
+                for line in raw.splitlines(keepends=True):
+                    if not line.strip():
+                        continue
+                    # Salvage only an explicit positive integer seq, never arbitrary digits.
+                    match = re.search(rb'"seq"\s*:\s*([1-9][0-9]*)(?=\s*[,}\r\n]|$)', line)
+                    if match:
+                        high = max(high, int(match.group(1)))
+                    try:
+                        entry = json.loads(line.decode("utf-8"))
+                        if not isinstance(entry, dict) or type(entry.get("seq")) is not int or entry["seq"] <= 0:
+                            raise ValueError("invalid seq")
+                        high = max(high, entry["seq"])
+                        if msgs and entry["seq"] <= msgs[-1]["seq"]:
+                            raise ValueError("duplicate or unordered seq")
+                        if (not isinstance(entry.get("text", ""), str)
+                                or not isinstance(entry.get("author", ""), str)
+                                or not isinstance(entry.get("ts", 0), (int, float))
+                                or not math.isfinite(entry.get("ts", 0))):
+                            raise ValueError("invalid message fields")
+                        entry.setdefault("ts", 0)
+                        msgs.append(entry)
+                    except (ValueError, UnicodeDecodeError, RecursionError):
+                        bad.append(line)
+                if bad:
+                    token = "%d-%s" % (int(now() * 1000000), uuid.uuid4().hex[:8])
+                    backup = path.with_name("messages.backup-" + token + ".jsonl")
+                    quarantine = path.with_name("messages.corrupt-" + token + ".jsonl")
+                    for target, data in ((backup, raw), (quarantine, b"".join(bad))):
+                        with open(target, "xb") as f:
+                            f.write(data)
+                            f.flush()
+                            os.fsync(f.fileno())
+                    msgs.append({"seq": high + 1, "id": "m-" + uuid.uuid4().hex[:10], "ts": now(),
+                                 "kind": "system", "author": "system", "subtle": True,
+                                 "text": "恢复聊天记录：已隔离 %d 行到 %s；原文件备份 %s。" % (len(bad), quarantine.name, backup.name)})
+                    # Original file remains intact until the fully flushed replacement is ready.
+                    fd, temp = tempfile.mkstemp(prefix="messages-recovery-", dir=str(path.parent))
+                    try:
+                        with os.fdopen(fd, "wb") as f:
+                            for entry in msgs:
+                                f.write((json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
+                            f.flush()
+                            os.fsync(f.fileno())
+                        os.replace(temp, path)
+                    finally:
+                        if os.path.exists(temp):
+                            os.unlink(temp)
                 self._messages[gid] = msgs
             return list(self._messages[gid])
 
@@ -263,10 +311,17 @@ class Store:
         with self.lock(gid):
             msgs = self.messages(gid)
             msg = dict(msg)
-            msg["seq"] = (msgs[-1]["seq"] + 1) if msgs else 1
+            msg["seq"] = max((m["seq"] for m in msgs), default=0) + 1
             msg.setdefault("id", "m-" + uuid.uuid4().hex[:10])
             msg.setdefault("ts", now())
-            with open(self._existing_dir(gid) / "messages.jsonl", "a", encoding="utf-8", newline="\n") as f:
-                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            with open(self._existing_dir(gid) / "messages.jsonl", "ab+") as f:
+                f.seek(0, os.SEEK_END)
+                if f.tell():
+                    f.seek(-1, os.SEEK_END)
+                    if f.read(1) != b"\n":
+                        f.write(b"\n")
+                f.write((json.dumps(msg, ensure_ascii=False) + "\n").encode("utf-8"))
+                f.flush()
+                os.fsync(f.fileno())
             self._messages[gid].append(msg)
             return msg

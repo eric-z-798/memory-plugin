@@ -26,7 +26,7 @@ from .routing import clean_overrides, resolve_route, route_settings
 from .availability import AvailabilityStore
 from .quota import QuotaMonitor
 
-MENTION_RE = re.compile(r"[@＠]\s?(claude|chatgpt|codex|gpt|gemini|全体成员|全体|所有人|大家|all|everyone)", re.I)
+MENTION_RE = re.compile(r"(?<![\w@＠])[@＠]\s?(claude|chatgpt|codex|gpt|gemini|全体成员|全体|所有人|大家|all|everyone)(?![A-Za-z0-9_.-])", re.I)
 ALL_WORDS = {"全体成员", "全体", "所有人", "大家", "all", "everyone"}
 
 GROUP_FIELDS = {
@@ -65,6 +65,8 @@ class GroupRunner:
         self._memory_context: dict = {}
         self._routing_snapshot = None
         self._paused_at_round_start = set()
+        self._failed_members = set()
+        self._trigger_seq = None
 
     # ----- 对外
     def snapshot(self) -> dict:
@@ -79,6 +81,7 @@ class GroupRunner:
 
     def submit(self, job: dict, require_idle: bool = False) -> None:
         job.setdefault("auto", 0)
+        job.setdefault("context_trigger", job.get("trigger"))
         with self._lock:
             if require_idle and (self._worker or self._jobs):
                 raise ValueError("请等当前讨论结束后再补答")
@@ -106,6 +109,8 @@ class GroupRunner:
                 if m not in last["participants"]:
                     last["participants"].append(m)
         last["mentioned"] = list(dict.fromkeys(last.get("mentioned", []) + job.get("mentioned", [])))
+        context = [t for t in (last.get("context_trigger"), job.get("context_trigger")) if t]
+        last["context_trigger"] = min(context) if context else None
         continuing = "continue" in (last["task"], job["task"])
         if last["task"] != job["task"]:
             last["task"] = "reply"
@@ -179,6 +184,9 @@ class GroupRunner:
     # ----- 一轮发言
     def _run_round(self, job: dict, cancel: CancelToken) -> None:
         self._routing_snapshot = None
+        if not job.get("auto"):
+            self._failed_members.clear()
+            self._trigger_seq = job.get("context_trigger", job.get("trigger"))
         self._paused_at_round_start = {m for m, state in self.engine.availability.snapshot().items() if state["paused"]}
         with self.store.lock(self.gid):
             group = self.store.load_group(self.gid)
@@ -198,6 +206,8 @@ class GroupRunner:
             if trigger:
                 with self._lock:
                     participants = [m for m in participants if self.seen.get(m, 0) < trigger]
+            if job.get("auto"):
+                participants = [m for m in participants if m not in self._failed_members]
             if not participants:
                 return
             group["round_counter"] = group.get("round_counter", 0) + 1
@@ -260,7 +270,8 @@ class GroupRunner:
             except Exception as exc:
                 traceback.print_exc()
                 if not cancel.cancelled and self.store.exists(self.gid):
-                    self._system("%s 这次未完成：%s" % (name_of(member), exc))
+                    self._failed_members.add(member)
+                    self._system("%s 这次未完成：%s" % (name_of(member), exc), retry_member=member, task=task_of(member))
 
         threads = [threading.Thread(target=work, args=(m,), daemon=True) for m in members]
         for t in threads:
@@ -284,7 +295,7 @@ class GroupRunner:
             msgs = frozen["messages"] if frozen else self.store.messages(self.gid)
             seen_seq = upto_seq if upto_seq is not None else (msgs[-1]["seq"] if msgs else 0)
             prompt = prompts.build_member_prompt(group, board, msgs, member, task, settings, upto_seq,
-                                                  memory_context=self._memory_context)
+                                                  memory_context=self._memory_context, trigger_seq=self._trigger_seq)
             route = None
             try:
                 query = next((m.get("text", "") for m in reversed(msgs) if m.get("kind") == "user"), "")
@@ -303,6 +314,7 @@ class GroupRunner:
                 return False
             except (MemberError, ValueError) as exc:
                 if not cancel.cancelled:
+                    self._failed_members.add(member)
                     if isinstance(exc, MemberError):
                         self.engine.record_member_failure(member, exc)
                     paused = self.engine.availability.snapshot()[member]["paused"]
@@ -357,6 +369,13 @@ class GroupRunner:
             with self._lock:
                 self.seen[member] = max(self.seen.get(member, 0), seen_seq)
             return True
+        except StoreError:
+            raise
+        except Exception as exc:
+            if not cancel.cancelled:
+                self._failed_members.add(member)
+            self._system("%s 这次未完成：%s" % (name_of(member), exc), retry_member=member, task=task)
+            return False
         finally:
             with self._lock:
                 self._speaking.pop(member, None)
@@ -386,7 +405,7 @@ class GroupRunner:
         for sec in order:
             if cancel.cancelled:
                 return
-            if sec in self._paused_at_round_start or self.engine.availability.snapshot()[sec]["paused"]:
+            if sec in self._failed_members or sec in self._paused_at_round_start or self.engine.availability.snapshot()[sec]["paused"]:
                 continue
             with self._lock:
                 self._speaking[sec] = now()
@@ -444,7 +463,10 @@ class GroupRunner:
             if self._jobs:  # 群主已经有新的指令在排队
                 return
         availability = self.engine.availability.snapshot()
-        members = [m for m in group.get("members", []) if m in MEMBER_ORDER and not availability[m]["paused"]]
+        if self._failed_members:
+            self._system("本回合失败成员不自动重试：%s；可点“补答此成员”。" % "、".join(name_of(m) for m in sorted(self._failed_members)), subtle=True)
+        members = [m for m in group.get("members", []) if m in MEMBER_ORDER
+                   and not availability[m]["paused"] and m not in self._failed_members]
         board = self.store.load_board(self.gid)
         owing, disputed = [], False
         items = [("decision", d) for d in board["decisions"]] + [("task", t) for t in board["tasks"]]

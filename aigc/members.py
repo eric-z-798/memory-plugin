@@ -689,7 +689,11 @@ class DemoMember:
         name = name_of(self.member)
         topic = ""
         for m in re.finditer(r"#\d+ 群主（[^）]*）：\n(.*?)(?=\n\n#\d+ |\n\n## |\Z)", prompt, re.S):
-            topic = m.group(1).strip()
+            encoded = m.group(1).strip()
+            try:
+                topic = json.loads(encoded)
+            except ValueError:
+                topic = encoded  # Older prompt fixtures remain readable.
         topic = re.sub(r"\s+", " ", topic)[:40] or "这个话题"
         board = prompt.split("## 共享看板", 1)[-1].split("## 前情摘要", 1)[0]
 

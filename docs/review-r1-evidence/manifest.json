@@ -1,0 +1,173 @@
+[
+  {
+    "name": "baseline-python",
+    "command": "python3 -m unittest discover -s tests (unmodified 433a43a checkout)",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "baseline-python.log.gz",
+    "raw_bytes": 347,
+    "raw_sha256": "5c3c2070d3b9f9aa3dfff4008217316443b873df7724eecb4aa5a67ba6386838"
+  },
+  {
+    "name": "browser-existing",
+    "command": "python3 tools/test_browser.py",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "browser-existing.log.gz",
+    "raw_bytes": 410,
+    "raw_sha256": "c82fbbed5f11658f45b0b3fddc2c92e794a3b507739a185ca345e3eb7df42ee7"
+  },
+  {
+    "name": "browser-r1-final",
+    "command": "XINGSHU_QA_OUTPUT=/workspace/r1-evidence/browser-images python3 tools/test_review_r1_browser.py",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "browser-r1-final.log.gz",
+    "raw_bytes": 300,
+    "raw_sha256": "3c7e8c263394c88746e27bcaa2d1b9b0bea239f76eaf684c67aa008b1412a3a0"
+  },
+  {
+    "name": "browser-r1",
+    "command": "XINGSHU_QA_OUTPUT=/workspace/r1-evidence/browser-images python3 tools/test_review_r1_browser.py",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "browser-r1.log.gz",
+    "raw_bytes": 300,
+    "raw_sha256": "3c7e8c263394c88746e27bcaa2d1b9b0bea239f76eaf684c67aa008b1412a3a0"
+  },
+  {
+    "name": "browser-routing",
+    "command": "python3 tools/test_routing_browser.py",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "browser-routing.log.gz",
+    "raw_bytes": 754,
+    "raw_sha256": "3f5dede0916031ab35ae34fe0164a1161db42472e2b5c365800296ec83528e70"
+  },
+  {
+    "name": "browser-setup",
+    "command": "python3 tools/test_setup_browser.py",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "browser-setup.log.gz",
+    "raw_bytes": 1035,
+    "raw_sha256": "47833ee3279725e026eaea872d13f4ffd2e894a15dfc6009df1167dc8ffc5969"
+  },
+  {
+    "name": "dom-final",
+    "command": "NODE_PATH=/tmp/xingshu-domqa/node_modules node tools/test_ui_dom.cjs",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "dom-final.log.gz",
+    "raw_bytes": 263,
+    "raw_sha256": "ad2ad8b45724fbcbb33eef9d1a38819a55dfe99ed87e701bf25f15fb0325bbb4"
+  },
+  {
+    "name": "dom",
+    "command": "NODE_PATH=/tmp/xingshu-domqa/node_modules node tools/test_ui_dom.cjs",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "dom.log.gz",
+    "raw_bytes": 263,
+    "raw_sha256": "ad2ad8b45724fbcbb33eef9d1a38819a55dfe99ed87e701bf25f15fb0325bbb4"
+  },
+  {
+    "name": "iteration-python",
+    "command": "python3 -m unittest discover -s tests",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "iteration-python.log.gz",
+    "raw_bytes": 347,
+    "raw_sha256": "7c10e9feac5ed033b2c852664451a25af2589e4a92071627095fcee95a3c698a"
+  },
+  {
+    "name": "python-final-precommit",
+    "command": "python3 -m unittest discover -s tests",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "python-final-precommit.log.gz",
+    "raw_bytes": 367,
+    "raw_sha256": "5972a00011a9d662fce6f6934d2fdec4522716c6216789eb68361f8a6c3b0d51"
+  },
+  {
+    "name": "python-full",
+    "command": "python3 -m unittest discover -s tests",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "python-full.log.gz",
+    "raw_bytes": 365,
+    "raw_sha256": "6027173c51652922baf414b079258f840548832d8d3199e5e19071a8a51eee21"
+  },
+  {
+    "name": "regression-baseline-final",
+    "command": "python3 -m unittest discover -s /tmp/xingshu-r1-baseline/tests -p test_review_r1.py (final 20 regressions)",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 1,
+    "raw_output": "regression-baseline-final.log.gz",
+    "raw_bytes": 2437872,
+    "raw_sha256": "fd4b83aa4e98a06595cd680064b54ea95d805b61a6a01edae345b6e619c2bfe3"
+  },
+  {
+    "name": "regression-baseline",
+    "command": "python3 -m unittest discover -s /tmp/xingshu-r1-baseline/tests -p test_review_r1.py (initial 14 regressions)",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 1,
+    "raw_output": "regression-baseline.log.gz",
+    "raw_bytes": 2359656,
+    "raw_sha256": "2b60a6347abb4462b71afd6007b34b6ed4c0c1d0437b375643876ee898c81ded"
+  },
+  {
+    "name": "regression-python-all",
+    "command": "python3 -m unittest discover -s tests -p test_review_r1.py",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "regression-python-all.log.gz",
+    "raw_bytes": 119,
+    "raw_sha256": "370a3d39ec09e447f5d895df104b833a0d6394b1123caf297e135d7327941b57"
+  },
+  {
+    "name": "regression-python-expanded",
+    "command": "python3 -m unittest discover -s tests -p test_review_r1.py",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 1,
+    "raw_output": "regression-python-expanded.log.gz",
+    "raw_bytes": 708,
+    "raw_sha256": "b921650bd3dba3d16ebe9b4c60e02319d9e6eaa2365480484e46e9175f39aafd"
+  },
+  {
+    "name": "regression-python-final",
+    "command": "python3 -m unittest discover -s tests -p test_review_r1.py",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "regression-python-final.log.gz",
+    "raw_bytes": 116,
+    "raw_sha256": "56dfb64c746d9e6f094bf20d6435e2e31760c29c98ed3a5c2cdd79299ae8a1f3"
+  },
+  {
+    "name": "regression-python",
+    "command": "python3 -m unittest discover -s tests -p test_review_r1.py",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 1,
+    "raw_output": "regression-python.log.gz",
+    "raw_bytes": 2974,
+    "raw_sha256": "c2c7918808397f0fa7c87da91bfad82439efd8a20d42d75f3e94d5b21bfcb2bc"
+  },
+  {
+    "name": "setup-jsdom-tmp",
+    "command": "npm install --cache /tmp/xingshu-npm-cache --prefix /tmp/xingshu-domqa jsdom@24",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_output": "setup-jsdom-tmp.log.gz",
+    "raw_bytes": 355,
+    "raw_sha256": "e7794717017d4e56dcf9ccdbd7503cc3a79c720fcf0a86074644806b8e078bd8"
+  },
+  {
+    "name": "setup-jsdom",
+    "command": "npm install --prefix /tmp/xingshu-domqa jsdom@24",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 1,
+    "raw_output": "setup-jsdom.log.gz",
+    "raw_bytes": 767,
+    "raw_sha256": "558783e1faa2b339a089757d31ff4dece3b4e8bead3d6dc4b5b8458a2ee69fd3"
+  }
+]

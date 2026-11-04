@@ -220,6 +220,16 @@ def _find_similar(items: List[dict], field: str, text: str) -> Optional[dict]:
     return None
 
 
+def _single_lines(value):
+    if isinstance(value, str):
+        return value.replace("\r", " ").replace("\n", " ")
+    if isinstance(value, list):
+        return [_single_lines(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _single_lines(v) for k, v in value.items()}
+    return value
+
+
 def apply_status(board: dict, member: str, status: Any, members: List[str], seq: Optional[int] = None) -> List[str]:
     """把成员的状态更新写进看板，返回给界面显示的简短效果列表。
 
@@ -227,6 +237,7 @@ def apply_status(board: dict, member: str, status: Any, members: List[str], seq:
     effects: List[str] = []
     if not isinstance(status, dict):
         return effects
+    status = _single_lines(status)
     who = name_of(member)
 
     summary = str(status.get("summary") or "").strip()
@@ -363,6 +374,13 @@ def apply_status(board: dict, member: str, status: Any, members: List[str], seq:
 def user_action(board: dict, action: str, payload: dict, members: List[str]) -> Tuple[str, Optional[str]]:
     """执行群主在看板上的操作。返回（结果说明，需要发到群里的话或 None）。出错抛 ValueError。"""
     text = str(payload.get("text") or "").strip()
+    limit = {"set_goal": 2000, "add_decision": 600, "edit": 600,
+             "comment": 1000, "resolve_need": 1000}.get(action)
+    if limit and len(text) > limit:
+        raise ValueError("内容最多 %d 字" % limit)
+    if action == "add_task" and (len(str(payload.get("title") or text).strip()) > 300
+                                or len(str(payload.get("deliverable") or "").strip()) > 300):
+        raise ValueError("任务和交付物最多各 300 字")
 
     if action == "set_goal":
         board["goal"] = clip(text, 2000)
@@ -496,6 +514,7 @@ def _votes_line(item: dict, members: List[str]) -> str:
 
 
 def render_markdown(board: dict, members: List[str]) -> str:
+    board = _single_lines(board)  # Also isolate text saved by earlier versions.
     lines: List[str] = []
     lines.append("### 群目标")
     lines.append(board.get("goal") or "（群主还没写）")
@@ -568,7 +587,26 @@ _TRAILING_LABEL = re.compile(
 _EMPTY_FENCE = re.compile(r"```[a-zA-Z]*\s*```\s*$")
 
 
+def _decode_status(candidate: str) -> Any:
+    try:
+        value = json.loads(candidate)
+    except RecursionError as exc:
+        raise ValueError("状态更新嵌套过深") from exc
+    pending = [(value, 0)]
+    while pending:
+        item, depth = pending.pop()
+        if depth > 64:
+            raise ValueError("状态更新嵌套超过 64 层")
+        if isinstance(item, dict):
+            pending.extend((v, depth + 1) for v in item.values())
+        elif isinstance(item, list):
+            pending.extend((v, depth + 1) for v in item)
+    return value
+
+
 def _loads_lenient(body: str) -> Any:
+    if len(body.encode("utf-8")) > 65536:
+        raise ValueError("状态更新超过 64 KB")
     body = body.strip()
     body = re.sub(r"^```[a-zA-Z]*\s*", "", body)
     body = re.sub(r"\s*```$", "", body)
@@ -577,12 +615,12 @@ def _loads_lenient(body: str) -> Any:
         raise ValueError("没有找到 JSON")
     candidate = body[start:end + 1]
     try:
-        return json.loads(candidate)
+        return _decode_status(candidate)
     except json.JSONDecodeError:
         fixed = (candidate.replace("“", '"').replace("”", '"')
                  .replace("‘", "'").replace("’", "'"))
         fixed = re.sub(r",\s*([}\]])", r"\1", fixed)
-        return json.loads(fixed)
+        return _decode_status(fixed)
 
 
 def extract_status(text: str) -> Tuple[str, Optional[dict], Optional[str]]:
@@ -605,7 +643,7 @@ def extract_status(text: str) -> Tuple[str, Optional[dict], Optional[str]]:
         visible = _TRAILING_LABEL.sub("", visible).rstrip()
     try:
         data = _loads_lenient(body)
-    except (ValueError, json.JSONDecodeError) as exc:
+    except (ValueError, RecursionError) as exc:
         return visible.strip(), None, "状态更新格式有误：%s" % exc
     if not isinstance(data, dict):
         return visible.strip(), None, "状态更新不是对象"

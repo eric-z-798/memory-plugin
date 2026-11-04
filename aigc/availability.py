@@ -11,7 +11,7 @@ import math
 import threading
 from pathlib import Path
 
-from .common import MEMBER_ORDER, atomic_write_json, now, read_json
+from .common import MEMBER_ORDER, atomic_write_json, now, read_json, CorruptJSON
 
 
 _PAUSE_REASONS = ("quota", "rate_limit", "manual")
@@ -38,7 +38,17 @@ class AvailabilityStore:
         self.path = self.root / "model-availability.json"
         self._lock = threading.RLock()
         self._states = {member: _default_state() for member in MEMBER_ORDER}
-        saved = read_json(self.path, {})
+        try:
+            saved = read_json(self.path, {}, strict=True)
+            if not isinstance(saved, dict):
+                raise CorruptJSON("暂停状态不是对象")
+        except (CorruptJSON, OSError):
+            self._states = {member: {"paused": True, "reason": "manual",
+                "message": "暂停状态文件损坏或不可读；请核对备份后手动恢复。", "since": now()}
+                for member in MEMBER_ORDER}
+            # Persist fail-closed state across subsequent restarts.
+            atomic_write_json(self.path, self._states)
+            saved = {}
         if isinstance(saved, dict):
             for member in MEMBER_ORDER:
                 entry = saved.get(member)
