@@ -174,7 +174,7 @@ class UserActions(unittest.TestCase):
         self.assertTrue(d["user_notes"][0]["pending"])
         self.assertIn("对 D-001 的意见", note)
         md = B.render_markdown(self.b, M)
-        self.assertIn("群主意见（待回应）：预算要减半", md)
+        self.assertIn("【群主意见·工具标注】：预算要减半", md)
         self.assertIn("Claude 未表态", md)
         for m in M:
             B.apply_status(self.b, m, {"votes": [{"id": "D-001", "vote": "agree"}]}, M)

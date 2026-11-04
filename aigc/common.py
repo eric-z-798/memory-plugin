@@ -92,10 +92,10 @@ def read_json(path: Path, default: Any, strict: bool = False) -> Any:
     except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         # 文件损坏时保留一份备份，再用默认值继续，不让整个程序起不来
         try:
-            import shutil
-            import uuid
-            backup = str(path) + ".broken-" + str(time.time_ns()) + "-" + uuid.uuid4().hex[:8]
-            shutil.copyfile(path, backup)
+            import hashlib
+            raw = path.read_bytes()
+            backup = Path(str(path) + ".broken-" + hashlib.sha256(raw).hexdigest())
+            preserve_bytes(backup, raw)
         except OSError:
             pass
         if strict:
@@ -115,3 +115,25 @@ _GID_RE = re.compile(r"^g-[a-z0-9]{6,32}$")
 
 def valid_gid(gid: str) -> bool:
     return bool(_GID_RE.match(gid or ""))
+
+
+def preserve_bytes(path: Path, data: bytes) -> None:
+    """Write an immutable evidence copy; repeated recovery attempts reuse identical bytes."""
+    import tempfile
+    if path.exists():
+        if path.read_bytes() != data:
+            raise OSError("恢复备份内容不一致：" + path.name)
+        return
+    fd, temporary = tempfile.mkstemp(prefix="evidence-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.read_bytes() != data:
+                raise OSError("恢复备份内容不一致：" + path.name)
+    finally:
+        os.unlink(temporary)

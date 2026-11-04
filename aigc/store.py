@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import copy
 import json
 import os
@@ -26,6 +27,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import board as board_mod
+from .common import preserve_bytes
 from .common import MEMBER_ORDER, atomic_write_json, name_of, now, read_json, valid_gid
 from .memory import MemoryStore
 from .routing import default_routing, clean_routing, resolve_route
@@ -298,7 +300,7 @@ class Store:
                     "updated": max(group.get("updated", 0), last["ts"] if last else 0),
                     "preview": ((name_of(last.get("author", "")) + "：" + last.get("text", "")) if last else "")[:80],
                 })
-            except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            except (StoreError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
                 result.append({"id": gdir.name, "project_id": gdir.name, "name": "群数据需要恢复",
                                "members": [], "updated": 0, "preview": str(exc), "error": str(exc)})
         result.sort(key=lambda g: g["updated"], reverse=True)
@@ -358,7 +360,7 @@ class Store:
                             raise ValueError("invalid message fields")
                         entry.setdefault("ts", 0)
                         msgs.append(entry)
-                    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+                    except (ValueError, UnicodeDecodeError, RecursionError, OverflowError) as exc:
                         candidates, ignored = _recover_top_level_sequences(line)
                         high = max([high] + candidates)
                         ignored_sequences.extend(dict(item, line=line_number) for item in ignored)
@@ -366,14 +368,11 @@ class Store:
                                                     "reserved_sequences": candidates})
                         bad.append(line)
                 if bad:
-                    token = "%d-%s" % (int(now() * 1000000), uuid.uuid4().hex[:8])
+                    token = hashlib.sha256(raw).hexdigest()
                     backup = path.with_name("messages.backup-" + token + ".jsonl")
                     quarantine = path.with_name("messages.corrupt-" + token + ".jsonl")
                     for target, data in ((backup, raw), (quarantine, b"".join(bad))):
-                        with open(target, "xb") as f:
-                            f.write(data)
-                            f.flush()
-                            os.fsync(f.fileno())
+                        preserve_bytes(target, data)
                     msgs.append({"seq": _next_message_seq(high), "id": "m-" + uuid.uuid4().hex[:10], "ts": now(),
                                  "kind": "system", "author": "system", "subtle": True,
                                  "text": ("恢复聊天记录：已隔离 %d 行到 %s；原文件备份 %s。" % (len(bad), quarantine.name, backup.name)
@@ -400,19 +399,23 @@ class Store:
     def append_message(self, gid: str, msg: dict) -> dict:
         with self.lock(gid):
             msgs = self.messages(gid)
-            msg = dict(msg)
-            msg["seq"] = _next_message_seq(max((m["seq"] for m in msgs), default=0))
-            msg.setdefault("id", "m-" + uuid.uuid4().hex[:10])
+            msg = {"seq": _next_message_seq(max((m["seq"] for m in msgs), default=0)),
+                   "id": msg.get("id", "m-" + uuid.uuid4().hex[:10]),
+                   **{k: v for k, v in msg.items() if k not in ("seq", "id")}}
             msg.setdefault("ts", now())
             encoded = (json.dumps(msg, ensure_ascii=False) + "\n").encode("utf-8")
-            with open(self._existing_dir(gid) / "messages.jsonl", "ab+") as f:
-                f.seek(0, os.SEEK_END)
-                if f.tell():
-                    f.seek(-1, os.SEEK_END)
-                    if f.read(1) != b"\n":
-                        f.write(b"\n")
-                f.write(encoded)
-                f.flush()
-                os.fsync(f.fileno())
+            try:
+                with open(self._existing_dir(gid) / "messages.jsonl", "ab+") as f:
+                    f.seek(0, os.SEEK_END)
+                    if f.tell():
+                        f.seek(-1, os.SEEK_END)
+                        if f.read(1) != b"\n":
+                            f.write(b"\n")
+                    f.write(encoded)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except OSError:
+                self._messages.pop(gid, None)
+                raise
             self._messages[gid].append(msg)
             return msg

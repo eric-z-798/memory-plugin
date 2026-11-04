@@ -222,7 +222,7 @@ def _find_similar(items: List[dict], field: str, text: str) -> Optional[dict]:
 
 def _single_lines(value):
     if isinstance(value, str):
-        return value.replace("\r", " ").replace("\n", " ")
+        return value.replace("\r", " ").replace("\n", " ").replace("【群主意见·工具标注】", "（条目内身份字样）")
     if isinstance(value, list):
         return [_single_lines(v) for v in value]
     if isinstance(value, dict):
@@ -350,6 +350,8 @@ def apply_status(board: dict, member: str, status: Any, members: List[str], seq:
             log(board, "system", "%s 是「%s」状态，%s 的更新已忽略" % (item["id"], TASK_STATUS[item["status"]], who))
             continue
         note = clip(str(entry.get("note") or "").strip(), 300)
+        if item["status"] == new_status and item["notes"] and item["notes"][-1].get("who") == member and item["notes"][-1].get("text") == (note or TASK_STATUS[new_status]):
+            continue
         item["status"] = new_status
         item["updated"] = now()
         item["notes"].append({"who": member, "text": note or TASK_STATUS[new_status], "ts": now(), "seq": seq})
@@ -359,6 +361,8 @@ def apply_status(board: dict, member: str, status: Any, members: List[str], seq:
     # 6. 需要群主处理的事
     for text in _iter_texts(status.get("need_user")):
         if text in ("无", "没有", "none", "None", "-"):
+            continue
+        if any(not n.get("resolved") and n.get("member") == member and n.get("text") == clip(text, 300) for n in board["need_user"]):
             continue
         nid = _next_id(board, "N")
         board["need_user"].append({"id": nid, "member": member, "text": clip(text, 300), "ts": now(),
@@ -538,7 +542,7 @@ def render_markdown(board: dict, members: List[str]) -> str:
         lines.append("  表态：%s" % _votes_line(d, members))
         for note in d.get("user_notes", []):
             if note.get("pending"):
-                lines.append("  群主意见（待回应）：%s" % note["text"])
+                lines.append("  【群主意见·工具标注】：%s" % note["text"])
     for d in done_d[-30:]:
         lines.append("- %s【已生效】%s" % (d["id"], d["text"]))
     for d in rejected[-5:]:
@@ -557,7 +561,7 @@ def render_markdown(board: dict, members: List[str]) -> str:
         lines.append("  表态：%s" % _votes_line(t, members))
         for note in t.get("user_notes", []):
             if note.get("pending"):
-                lines.append("  群主意见（待回应）：%s" % note["text"])
+                lines.append("  【群主意见·工具标注】：%s" % note["text"])
     for t in active:
         last = t["notes"][-1]["text"] if t.get("notes") else ""
         lines.append("- %s【%s】负责人：%s｜%s%s%s" % (

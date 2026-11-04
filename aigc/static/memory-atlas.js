@@ -54,9 +54,17 @@
       const bound = limits();
       panX = Math.max(-bound.x, Math.min(bound.x, panX));
       panY = Math.max(-bound.y, Math.min(bound.y, panY));
-      stage.style.touchAction = scale > 1 || bound.y > 0 ? 'none' : 'pan-y';
+      stage.style.touchAction = scale > 1 ? 'none' : 'pan-y';
+      stage.style.overflowY = scale > 1 ? 'hidden' : 'auto';
+      space.style.position = scale > 1 ? 'absolute' : 'relative';
+      space.style.left = space.style.top = scale > 1 ? '50%' : '0';
+      space.style.marginLeft = scale > 1 ? -canvasW / 2 + 'px' : '0';
+      space.style.marginTop = scale > 1 ? -canvasH / 2 + 'px' : '0';
+      if (scale <= 1) { panX = 0; panY = 0; }
+      else stage.scrollTop = 0;
       space.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
       zoomValue.textContent = Math.round(scale * 100) + '%';
+      requestAnimationFrame(fitLabels);
     };
     for (const [label, text, handler] of [
       ['缩小星图', '−', () => { scale = Math.max(.8, scale - .2); applyTransform(); }],
@@ -70,8 +78,8 @@
     // Controls live outside the clipped, pannable canvas.
 
     stage.addEventListener('pointerdown', event => {
-      if (event.button !== 0 || (event.pointerType === 'touch' && stage.style.touchAction !== 'none')) return;
       moved = false;
+      if (event.button !== 0 || (event.pointerType === 'touch' && stage.style.touchAction !== 'none')) return;
       drag = { x: event.clientX, y: event.clientY, px: panX, py: panY };
       stage.classList.add('is-dragging');
     });
@@ -83,12 +91,32 @@
       panY = drag.py + event.clientY - drag.y;
       applyTransform();
     });
-    const endDrag = () => { drag = null; stage.classList.remove('is-dragging'); };
+    const endDrag = event => {
+      if (event.type === 'pointerup' && event.pointerType === 'touch' && drag && !moved) {
+        const target = event.target.closest('.atlas-node');
+        if (target) select(target.dataset.memoryId);
+      }
+      drag = null; stage.classList.remove('is-dragging');
+    };
     stage.addEventListener('pointerup', endDrag); stage.addEventListener('pointercancel', endDrag);
     const legend = el('div', 'atlas-legend');
     const explanation = el('p', 'atlas-explanation', '每个亮点是一条记忆 · 连线表示同一类型，不代表因果关系');
     root.append(head, stage, zoom, legend, explanation);
-    let selected = null, entries = [], buttons = new Map(), lines = new Map();
+    let selected = null, entries = [], buttons = new Map(), lines = new Map(), lastFiltered = false;
+    function fitLabels() {
+      const bounds = stage.getBoundingClientRect();
+      for (const button of buttons.values()) {
+        const label = button.querySelector('.atlas-node-label');
+        label.style.maxWidth = Math.max(40, (bounds.width - 20) / scale) + 'px';
+        label.style.transform = 'translateX(-50%)';
+        const rect = label.getBoundingClientRect();
+        if (!rect.width) continue;
+        const dx = Math.max(0, bounds.left + 8 - rect.left) - Math.max(0, rect.right - bounds.right + 8);
+        const dy = Math.max(0, bounds.top + 8 - rect.top) - Math.max(0, rect.bottom - bounds.bottom + 8);
+        label.style.transform = `translateX(calc(-50% + ${dx / scale}px)) translateY(${dy / scale}px)`;
+      }
+    }
+    stage.addEventListener('scroll', fitLabels);
     const select = (id, focus = false) => {
       selected = id;
       for (const [key, button] of buttons) {
@@ -97,16 +125,21 @@
         button.tabIndex = active ? 0 : -1;
         if (lines.get(key)) lines.get(key).classList.toggle('is-selected', active);
         if (active && focus) {
-          panX = (50 - parseFloat(button.style.left)) * canvasW * scale / 100;
-          panY = (50 - parseFloat(button.style.top)) * canvasH * scale / 100;
-          applyTransform();
+          if (scale > 1) {
+            panX = (50 - parseFloat(button.style.left)) * canvasW * scale / 100;
+            panY = (50 - parseFloat(button.style.top)) * canvasH * scale / 100;
+            applyTransform();
+          } else if (button.scrollIntoView) button.scrollIntoView({block: 'nearest', inline: 'nearest'});
           button.focus({ preventScroll: true });
         }
       }
+      fitLabels();
       const entry = entries.find(item => item.id === id);
       if (onSelect) onSelect(entry || null);
     };
-    function setEntries(next, { filtered = false } = {}) {
+    function setEntries(next, { filtered = lastFiltered } = {}) {
+      const focused = root.contains(document.activeElement) && document.activeElement.dataset.memoryId;
+      lastFiltered = filtered;
       entries = next.slice(); buttons = new Map(); lines = new Map();
       svg.replaceChildren(); layer.replaceChildren(); legend.replaceChildren();
       empty.hidden = entries.length > 0; space.hidden = !entries.length;
@@ -118,21 +151,18 @@
       const width = stage.clientWidth || 350, height = stage.clientHeight || 330;
       const columns = Math.max(1, Math.floor(width / 52));
       canvasW = width;
-      canvasH = Math.max(height, Math.ceil(shown.length / columns) * 52 + 32);
-      space.style.width = canvasW + 'px'; space.style.height = canvasH + 'px';
-      space.style.left = '50%'; space.style.top = '50%';
-      space.style.marginLeft = -canvasW / 2 + 'px'; space.style.marginTop = -canvasH / 2 + 'px';
-      let position = 0;
-      applyTransform();
       const groups = {};
       for (const item of shown) {
         const kind = TYPES[item.kind] ? item.kind : 'note';
         (groups[kind] ||= []).push(item);
       }
+      canvasH = Math.max(height, 40 + Object.values(groups).reduce((sum, values) => sum + 40 + Math.ceil(values.length / columns) * 52, 0));
+      space.style.width = canvasW + 'px'; space.style.height = canvasH + 'px';
+      core.style.display = shown.length ? 'none' : '';
+      let blockY = 20;
+      applyTransform();
       for (const [kind, values] of Object.entries(groups)) {
-        const type = TYPES[kind];
-        const hubLine = svgEl('path', {d: `M350 300 Q${type.x * 7} 300 ${type.x * 7} ${type.y * 6}`, stroke: type.color, class: 'atlas-hub-line', fill: 'none'});
-        svg.append(hubLine);
+        const type = {...TYPES[kind], x: 50, y: (blockY + 10) * 100 / canvasH};
         const hub = el('div', 'atlas-hub');
         hub.style.left = type.x + '%'; hub.style.top = type.y + '%'; hub.style.setProperty('--node-color', type.color);
         hub.append(el('span', 'atlas-hub-dot'), el('strong', '', type.label));
@@ -141,9 +171,9 @@
         legendItem.style.setProperty('--node-color', type.color); legend.append(legendItem);
         values.forEach((item, index) => {
           // Non-overlapping 44px targets, with room to pan dense constellations.
-          const x = ((position % columns) + .5) * 100 / columns;
-          const y = (16 + (Math.floor(position / columns) + .5) * 52) * 100 / canvasH;
-          position++;
+          const x = ((index % columns) + .5) * 100 / columns;
+          const y = (blockY + 40 + (Math.floor(index / columns) + .5) * 52) * 100 / canvasH;
+
           const line = svgEl('line', {x1:type.x * 7,y1:type.y * 6,x2:x * 7,y2:y * 6,stroke:type.color,class:'atlas-memory-line'});
           svg.append(line); lines.set(item.id,line);
           const button = el('button', 'atlas-node' + (item.status === 'pending' ? ' is-pending' : ''));
@@ -154,7 +184,7 @@
           const brief = item.content;
           button.title = brief;
           button.append(el('span', 'atlas-node-dot'), el('span', 'atlas-node-label', brief.slice(0, 12) + (brief.length > 12 ? '…' : '')));
-          button.addEventListener('click', event => { if (!moved || event.detail === 0) select(item.id); moved = false; });
+          button.addEventListener('click', event => { if ((!moved || event.detail === 0) && selected !== item.id) select(item.id); moved = false; });
           button.addEventListener('keydown', event => {
             if (!['ArrowRight','ArrowLeft','ArrowUp','ArrowDown'].includes(event.key)) return;
             event.preventDefault(); const all = [...buttons.keys()];
@@ -163,9 +193,10 @@
           });
           buttons.set(item.id, button); layer.append(button);
         });
+        blockY += 40 + Math.ceil(values.length / columns) * 52;
       }
       if (entries.length > shown.length) legend.append(el('span', 'atlas-overflow', `星图展示前 ${shown.length} 条，其余可在列表查看`));
-      select(entries.some(item => item.id === selected) ? selected : shown[0]?.id || null);
+      select(buttons.has(focused) ? focused : buttons.has(selected) ? selected : shown[0]?.id || null, !!focused);
     }
     if (typeof ResizeObserver !== 'undefined') {
       let previousWidth = 0;

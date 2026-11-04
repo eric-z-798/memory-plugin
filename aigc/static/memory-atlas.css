@@ -119,3 +119,6 @@
  .memory-workspace .memory-list { grid-template-columns:1fr; }
 }
 @media(prefers-reduced-motion:reduce) { .memory-atlas *, .memory-atlas *::before { transition:none!important; animation:none!important; scroll-behavior:auto!important; } }
+
+/* Labels remain readable without covering adjacent touch targets. */
+.atlas-node-label { pointer-events: none; }

@@ -26,7 +26,7 @@ from .routing import clean_overrides, resolve_route, route_settings
 from .availability import AvailabilityStore
 from .quota import QuotaMonitor
 
-MENTION_RE = re.compile(r"(?<![\w@＠])[@＠]\s?(claude|chatgpt|codex|gpt|gemini|全体成员|全体|所有人|大家|all|everyone)(?![A-Za-z0-9_.-])", re.I)
+MENTION_RE = re.compile(r"(?<![A-Za-z0-9_.+\-@＠])[@＠]\s?(claude|chatgpt|codex|gpt|gemini|全体成员|全体|所有人|大家|all|everyone)(?![A-Za-z0-9_-])(?!\.[A-Za-z0-9])", re.I)
 ALL_WORDS = {"全体成员", "全体", "所有人", "大家", "all", "everyone"}
 
 GROUP_FIELDS = {
@@ -295,7 +295,7 @@ class GroupRunner:
             msgs = frozen["messages"] if frozen else self.store.messages(self.gid)
             seen_seq = upto_seq if upto_seq is not None else (msgs[-1]["seq"] if msgs else 0)
             prompt = prompts.build_member_prompt(group, board, msgs, member, task, settings, upto_seq,
-                                                  memory_context=self._memory_context, trigger_seq=self._trigger_seq)
+                                                  memory_context=self._memory_context, trigger_seq=self._trigger_seq, seen_seq=self.seen.get(member, 0))
             route = None
             try:
                 query = next((m.get("text", "") for m in reversed(msgs) if m.get("kind") == "user"), "")
@@ -334,13 +334,11 @@ class GroupRunner:
                     return False
                 board = self.store.load_board(self.gid)
                 members = self.store.load_group(self.gid).get("members", [])
-                current = self.store.messages(self.gid)
-                next_seq = (current[-1]["seq"] + 1) if current else 1  # 持有锁，这就是这条发言的编号
-                effects = board_mod.apply_status(board, member, status, members, next_seq) if status else []
+                staged = copy.deepcopy(board)
+                effects = board_mod.apply_status(staged, member, status, members) if status else []
                 note = err or ("" if status else "没有附状态更新，看板未变化")
                 if note:
-                    board_mod.log(board, "system", "%s：%s" % (name_of(member), note))
-                self.store.save_board(self.gid, board)
+                    board_mod.log(staged, "system", "%s：%s" % (name_of(member), note))
                 proposed = (status or {}).get("memories", [])
                 candidates = [{"content": entry["content"], "kind": entry.get("kind", "note")}
                               for entry in proposed[:5]
@@ -354,6 +352,31 @@ class GroupRunner:
                     "memory_proposals": candidates,
                     "model_route": route,
                 })
+                # The durable message supplies the identity for every new board reference.
+                def bind_sources(value):
+                    if isinstance(value, dict):
+                        if "seq" in value and value["seq"] is None:
+                            value["seq"] = message["seq"]
+                        for child in value.values():
+                            bind_sources(child)
+                    elif isinstance(value, list):
+                        for child in value:
+                            bind_sources(child)
+                # Bind only newly staged records; existing records without provenance stay unchanged.
+                for collection in ("decisions", "tasks", "need_user"):
+                    existing = {item["id"]: item for item in board[collection]}
+                    for item in staged[collection]:
+                        old = existing.get(item["id"])
+                        if old is None:
+                            bind_sources(item)
+                        else:
+                            for field in ("notes", "user_notes"):
+                                for added in item.get(field, [])[len(old.get(field, [])):]:
+                                    bind_sources(added)
+                try:
+                    self.store.save_board(self.gid, staged)
+                except OSError as exc:
+                    raise OSError("回复已保存为 #%s，但看板未保存：%s" % (message["seq"], exc)) from exc
                 # AI proposals stay pending, even when other AI members repeat or agree.
                 if isinstance(candidates, list):
                     for index, candidate in enumerate(candidates[:5]):
@@ -393,6 +416,10 @@ class GroupRunner:
         group = self.store.load_group(self.gid)
         members = [m for m in group.get("members", []) if m in MEMBER_ORDER]
         if not members:
+            return
+        fold = prompts.bounded_summary_messages(group, board, fold)
+        if not fold:
+            self._system("摘要输入超过预算，尚未摘要的原文保留，摘要进度未推进。", subtle=True)
             return
         fixed = group.get("secretary")
         if fixed in members:
@@ -593,8 +620,8 @@ class Engine:
         for member in group.get("members", []):
             if member not in MEMBER_ORDER:
                 continue
-            prompt = (prompts.build_summary_prompt(group, board, messages, member) if task == "summary" else
-                      prompts.build_member_prompt(group, board, messages, member, task, settings, memory_context=memory))
+            prompt = (prompts.build_summary_prompt(group, board, prompts.bounded_summary_messages(group, board, messages), member) if task == "summary" else
+                      prompts.build_member_prompt(group, board, messages, member, task, settings, memory_context=memory, seen_seq=self._runners[gid].seen.get(member, 0) if gid in self._runners else 0))
             try:
                 routes[member] = resolve_route(member, settings, group, task, text, context_chars=len(prompt))
             except ValueError as exc:

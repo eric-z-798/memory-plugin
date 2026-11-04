@@ -121,10 +121,13 @@ class RecoveryRegressions(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'model-availability.json'
             path.write_bytes(b'{broken')
-            for _ in range(2): read_json(path, {})
+            for _ in range(100): read_json(path, {})
             backups=list(Path(tmp).glob('*.broken-*'))
-            self.assertEqual(len(backups), 2)
+            self.assertEqual(len(backups), 1)
             self.assertTrue(all(p.read_bytes()==b'{broken' for p in backups))
+            path.write_bytes(b'{different')
+            read_json(path, {})
+            self.assertEqual(len(list(Path(tmp).glob('*.broken-*'))), 2)
             for _ in range(2):
                 states=AvailabilityStore(tmp).snapshot()
                 self.assertTrue(all(v['paused'] for v in states.values()))
