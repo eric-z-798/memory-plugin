@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from . import APP_NAME, APP_NAME_LATIN, APP_TAGLINE, __version__
 from . import board as board_mod
 from .common import MEMBER_ORDER, name_of
-from .store import StoreError
+from .store import StoreError, MessageAppendError
 from .memory import MemoryError, MemoryConflict
 from .network import network_probe
 from .setup import SetupManager
@@ -501,8 +501,15 @@ class Handler(BaseHTTPRequestHandler):
             raise HttpError(400, "消息不能为空")
         if len(text) > MAX_MESSAGE:
             raise HttpError(400, "消息太长了（最多 %d 字）" % MAX_MESSAGE)
-        msg = self.app.engine.post_user_message(gid, text)
-        self.send_json(201, {"message": msg})
+        try:
+            msg = self.app.engine.post_user_message(gid, text)
+        except MessageAppendError as exc:
+            if exc.complete is None:
+                self.send_json(503, {"error": "消息写入结果无法核实，讨论未启动；请核对原文件后再操作，不要重发：%s" % exc,
+                                     "retry_safe": False, "message_id": exc.message["id"], "seq": exc.message["seq"]})
+                return
+            raise
+        self.send_json(202 if msg.get("write_warning") else 201, {"message": msg})
 
     def api_model_preview(self, gid, body):
         self._need_group(gid)

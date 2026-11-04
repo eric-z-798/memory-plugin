@@ -56,6 +56,17 @@ MAX_MESSAGE_SEQ = 2 ** 53 - 1
 _MAX_SEQ_BYTES = str(MAX_MESSAGE_SEQ).encode("ascii")
 
 
+class MessageAppendError(OSError):
+    """An append failed; readback describes visibility, never durability."""
+    def __init__(self, original, message, complete, read_error=None):
+        self.original = original
+        self.message = message
+        self.complete = complete
+        self.read_error = read_error
+        super().__init__("消息写入异常（耐久性未知）：%s%s" %
+                         (original, "; 读回失败：%s" % read_error if read_error else ""))
+
+
 class StoreError(Exception):
     pass
 
@@ -472,11 +483,20 @@ class Store:
                         f.seek(-1, os.SEEK_END)
                         if f.read(1) != b"\n":
                             f.write(b"\n")
-                    f.write(encoded)
+                    if f.write(encoded) != len(encoded):
+                        raise OSError("消息写入不完整")
                     f.flush()
                     os.fsync(f.fileno())
-            except OSError:
+            except OSError as exc:
                 self._messages.pop(gid, None)
-                raise
+                # Read only: do not invoke recovery or retry fsync to disguise the
+                # original failure. Match the entire record including id and seq.
+                complete, read_error = None, None
+                try:
+                    with open(self._existing_dir(gid) / "messages.jsonl", "rb") as check:
+                        complete = any(line.rstrip(b"\n") == encoded[:-1] for line in check)
+                except OSError as read_exc:
+                    read_error = read_exc
+                raise MessageAppendError(exc, msg, complete, read_error) from exc
             self._messages[gid].append(msg)
             return msg

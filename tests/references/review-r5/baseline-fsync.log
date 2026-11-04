@@ -1,0 +1,7 @@
+fsync injection fired True complete chats reread from disk 1 pending {'claude': {'id': 'm-593fcfc7b6', 'seq': 4, 'task': 'reply'}}
+after retry complete chats 2 model calls 2
+Traceback (most recent call last):
+  File "/workspace/r5-evidence/fsync_reply_probe.py", line 31, in <module>
+    assert len(after) == 1, 'complete persisted reply must not be offered a duplicate model retry'
+           ^^^^^^^^^^^^^^^
+AssertionError: complete persisted reply must not be offered a duplicate model retry

@@ -21,7 +21,7 @@ from . import board as board_mod
 from . import prompts
 from .common import MEMBER_ORDER, clip, name_of, normalize_member, now
 from .members import CancelToken, Cancelled, MemberError, classify_cli_failure
-from .store import StoreError
+from .store import StoreError, MessageAppendError
 from .memory import MemoryError
 from .routing import clean_overrides, resolve_route, route_settings
 from .availability import AvailabilityStore
@@ -173,9 +173,10 @@ class GroupRunner:
             message.update(incomplete=True, retry_member=retry_member, task=task)
         self.store.append_message(self.gid, message)
 
-    def _saved_warning(self, text: str) -> None:
+    def _saved_warning(self, text: str, blocked_member=None) -> None:
         try:
-            self._system(text, subtle=True)
+            self.store.append_message(self.gid, {"kind": "system", "author": "system", "text": text,
+                                                 "subtle": True, "retry_blocked_member": blocked_member})
         except Exception:
             # A second storage failure must not turn durable output into a retry.
             # The console retains the warning when disk storage is unavailable.
@@ -421,6 +422,13 @@ class GroupRunner:
                     self.seen[member] = progress["seen"]
             return True
         except Exception as exc:
+            if (message is None and isinstance(exc, MessageAppendError) and exc.complete is not False
+                    and exc.message.get("kind") == "chat" and exc.message.get("author") == member):
+                self._failed_members.add(member)
+                visibility = "完整回复可读" if exc.complete else "回复写入结果无法核实"
+                self._saved_warning("%s 的%s（#%s，%s）；耐久性未知，未更新看板、候选记忆或已读进度。请核对文件，不要重复补答：%s" %
+                                    (name_of(member), visibility, exc.message["seq"], exc.message["id"], exc), blocked_member=member)
+                return False
             if message is not None:
                 # Durable output is not a failed model call. Do not offer a retry
                 # that would duplicate the reply or its committed side effects.
@@ -585,6 +593,8 @@ class Engine:
         for message in self.store.messages(gid):
             if message.get("incomplete") and message.get("retry_member") in MEMBER_ORDER:
                 pending[message["retry_member"]] = {"id": message["id"], "seq": message["seq"], "task": message.get("task", "reply")}
+            elif message.get("retry_blocked_member") in MEMBER_ORDER:
+                pending.pop(message["retry_blocked_member"], None)
             elif message.get("kind") == "chat":
                 pending.pop(message.get("author"), None)
         return pending
@@ -615,7 +625,14 @@ class Engine:
         with self.store.lock(gid):
             members = self.store.load_group(gid).get("members", [])
             targets = [m for m in members if not mentioned or m in mentioned]
-            msg = self.store.append_user_message(gid, text, targets)
+            try:
+                msg = self.store.append_user_message(gid, text, targets)
+            except MessageAppendError as exc:
+                if exc.complete is not True:
+                    raise
+                warning = "消息 #%s 完整可读，但同步失败，耐久性未知；讨论未启动。核对后可继续讨论，请勿重发：%s" % (exc.message["seq"], exc)
+                runner._saved_warning(warning)
+                return {**exc.message, "write_warning": warning, "discussion_started": False}
         runner.submit({
             "type": "round", "participants": list(mentioned) if mentioned else None,
             "mentioned": list(mentioned or []), "task": "mention" if mentioned else "reply",

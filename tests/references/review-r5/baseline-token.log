@@ -1,0 +1,6 @@
+stored: synthetic-A new token remains in URL: True
+Traceback (most recent call last):
+  File "/workspace/r5-evidence/token_fragment_min.py", line 32, in <module>
+    assert stored == 'synthetic-B', 'new startup link did not replace stale token'
+           ^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: new startup link did not replace stale token

@@ -91,6 +91,9 @@
   }
 
   let accessToken = '';
+  let authNavigating = false;
+  const authRequests = new AbortController();
+  const abandonedAuth = () => new Promise(() => {});
   try {
     const fragment = new URLSearchParams(location.hash.slice(1));
     const incoming = fragment.get('token');
@@ -101,8 +104,21 @@
     } else accessToken = sessionStorage.getItem('xingshu.accessToken') || '';
   } catch (e) { /* the in-memory token still works when storage is unavailable */ }
 
+  // A startup link can be a same-document navigation. Reload with the new
+  // fragment so bootstrap also works when sessionStorage is disabled. The new
+  // document removes the fragment before any API request; old callbacks cannot
+  // mutate drafts or display responses from the previous capability.
+  window.addEventListener('hashchange', () => {
+    if (!new URLSearchParams(location.hash.slice(1)).get('token')) return;
+    saveDraft();
+    authNavigating = true;
+    authRequests.abort();
+    location.reload();
+  });
+
   async function api(method, path, body) {
-    const opt = { method, headers: { 'X-AIGC': '1', 'X-Xingshu-Token': accessToken }, cache: 'no-store' };
+    if (authNavigating) return abandonedAuth();
+    const opt = { method, headers: { 'X-AIGC': '1', 'X-Xingshu-Token': accessToken }, cache: 'no-store', signal: authRequests.signal };
     if (body !== undefined) {
       opt.headers['Content-Type'] = 'application/json';
       opt.body = JSON.stringify(body);
@@ -111,12 +127,14 @@
     try {
       res = await fetch(path, opt);
     } catch (e) {
+      if (authNavigating) return abandonedAuth();
       const err = new Error('连接不上程序，请确认它还在运行');
       err.network = true;
       throw err;
     }
     let data = null;
     try { data = await res.json(); } catch (e) { /* 不是 JSON */ }
+    if (authNavigating) return abandonedAuth();
     if (!res.ok) {
       const err = new Error((data && data.error) || ('请求失败（' + res.status + '）'));
       err.status = res.status;
@@ -1464,7 +1482,8 @@
       }
       if (S.gid !== gid || S.loading || !S.group) return;
       S.forceScroll = true;
-      S.state = Object.assign({}, S.state, { running: true });
+      S.state = Object.assign({}, S.state, { running: d.message.discussion_started !== false });
+      if (d.message.write_warning) toast(d.message.write_warning, true);
       renderTyping();
       appendMessages([d.message]);
       schedulePoll(300);
@@ -1717,12 +1736,15 @@
   async function exportGroup() {
     if (!S.group) return;
     try {
-      const response = await fetch('/api/groups/' + S.gid + '/export', { headers: { 'X-Xingshu-Token': accessToken }, cache: 'no-store' });
+      const response = await fetch('/api/groups/' + S.gid + '/export', { headers: { 'X-Xingshu-Token': accessToken }, cache: 'no-store', signal: authRequests.signal });
+      if (authNavigating) return;
       if (!response.ok) throw new Error('导出失败，请检查访问权限');
-      const url = URL.createObjectURL(await response.blob());
+      const blob = await response.blob();
+      if (authNavigating) return;
+      const url = URL.createObjectURL(blob);
       const a = h('a', { href: url, download: (S.group.name || 'group') + '.md' });
       document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { if (!authNavigating) toast(e.message, true); }
   }
 
   function confirmDeleteGroup() {
