@@ -262,9 +262,11 @@ class Store:
                         continue
                     # Salvage only an explicit positive integer seq, never arbitrary digits.
                     match = re.search(rb'"seq"\s*:\s*([1-9][0-9]*)(?=\s*[,}\r\n]|$)', line)
-                    if match:
-                        high = max(high, int(match.group(1)))
                     try:
+                        # Integer conversion can reject malformed, overlong numbers too.
+                        # Keep it inside the same raw-byte quarantine boundary as JSON decoding.
+                        if match:
+                            high = max(high, int(match.group(1)))
                         entry = json.loads(line.decode("utf-8"))
                         if not isinstance(entry, dict) or type(entry.get("seq")) is not int or entry["seq"] <= 0:
                             raise ValueError("invalid seq")

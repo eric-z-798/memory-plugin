@@ -425,6 +425,9 @@ class GroupRunner:
             except Cancelled:
                 return
             except (MemberError, ValueError) as exc:
+                if cancel.cancelled:
+                    return
+                self._failed_members.add(sec)
                 if isinstance(exc, MemberError):
                     self.engine.record_member_failure(sec, exc)
                 self._system("%s 未能整理摘要：%s" % (name_of(sec), exc), subtle=True, model_route=route)
@@ -450,7 +453,7 @@ class GroupRunner:
                 self.store.save_group(group)
             self._system("%s 整理了前情摘要（截至 #%d），可以在看板里查看。" % (name_of(sec), upto), subtle=True, model_route=route)
             return
-        self._system("这次前情摘要没有整理成功，下一轮会再试。", subtle=True)
+        self._system("这次前情摘要没有整理成功；本回合不自动重试失败成员，新的用户回合会再试。", subtle=True)
 
     # ----- 自动续轮
     def _maybe_auto_continue(self, job: dict) -> None:
@@ -464,7 +467,7 @@ class GroupRunner:
                 return
         availability = self.engine.availability.snapshot()
         if self._failed_members:
-            self._system("本回合失败成员不自动重试：%s；可点“补答此成员”。" % "、".join(name_of(m) for m in sorted(self._failed_members)), subtle=True)
+            self._system("本回合失败成员不自动重试：%s；失败发言可点“补答此成员”，摘要等新的用户回合再试。" % "、".join(name_of(m) for m in sorted(self._failed_members)), subtle=True)
         members = [m for m in group.get("members", []) if m in MEMBER_ORDER
                    and not availability[m]["paused"] and m not in self._failed_members]
         board = self.store.load_board(self.gid)

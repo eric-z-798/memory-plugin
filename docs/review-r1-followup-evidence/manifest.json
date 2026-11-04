@@ -1,0 +1,118 @@
+[
+  {
+    "command": [
+      "python3",
+      "tests/test_review_r1_followup.py",
+      "IndependentProbes"
+    ],
+    "output": "repro-before.log.gz",
+    "code_state": "6bd1f713 production code plus new regression file",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 1,
+    "raw_bytes": 1752,
+    "raw_sha256": "15166f9880e945e1feb63362d9141fa8edff0d9a19393b12c5c99f7c2a729b42"
+  },
+  {
+    "command": [
+      "python3",
+      "tests/test_review_r1_followup.py"
+    ],
+    "output": "repro-after.log.gz",
+    "code_state": "followup fixed tree",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_bytes": 692,
+    "raw_sha256": "7475d9024aa7a39af3089611071d956dc635dd5ccee73f5023c7e1580a3a40e0"
+  },
+  {
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests"
+    ],
+    "output": "python-full.log.gz",
+    "code_state": "followup fixed tree",
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "raw_bytes": 423,
+    "raw_sha256": "142dc663cae5e7b5278da59aec3bd3d32de063cde24bf8ce514be31efe68fd21"
+  },
+  {
+    "command": [
+      "node",
+      "tools/test_ui_dom.cjs"
+    ],
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "output": "test_ui_dom.log.gz",
+    "environment_overrides": {
+      "NODE_PATH": "/tmp/xingshu-domqa/node_modules",
+      "XINGSHU_QA_OUTPUT": "/workspace/r1-followup-evidence/browser-images"
+    },
+    "raw_bytes": 263,
+    "raw_sha256": "ad2ad8b45724fbcbb33eef9d1a38819a55dfe99ed87e701bf25f15fb0325bbb4"
+  },
+  {
+    "command": [
+      "python3",
+      "tools/test_browser.py"
+    ],
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "output": "test_browser.log.gz",
+    "environment_overrides": {
+      "NODE_PATH": "/tmp/xingshu-domqa/node_modules",
+      "XINGSHU_QA_OUTPUT": "/workspace/r1-followup-evidence/browser-images"
+    },
+    "raw_bytes": 410,
+    "raw_sha256": "03d73f449558167f2d3b294665b98fa2ddc828dc01190826ebc8907ab421aeaa"
+  },
+  {
+    "command": [
+      "python3",
+      "tools/test_routing_browser.py"
+    ],
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "output": "test_routing_browser.log.gz",
+    "environment_overrides": {
+      "NODE_PATH": "/tmp/xingshu-domqa/node_modules",
+      "XINGSHU_QA_OUTPUT": "/workspace/r1-followup-evidence/browser-images"
+    },
+    "raw_bytes": 754,
+    "raw_sha256": "3f5dede0916031ab35ae34fe0164a1161db42472e2b5c365800296ec83528e70"
+  },
+  {
+    "command": [
+      "python3",
+      "tools/test_setup_browser.py"
+    ],
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "output": "test_setup_browser.log.gz",
+    "environment_overrides": {
+      "NODE_PATH": "/tmp/xingshu-domqa/node_modules",
+      "XINGSHU_QA_OUTPUT": "/workspace/r1-followup-evidence/browser-images"
+    },
+    "raw_bytes": 1035,
+    "raw_sha256": "47833ee3279725e026eaea872d13f4ffd2e894a15dfc6009df1167dc8ffc5969"
+  },
+  {
+    "command": [
+      "python3",
+      "tools/test_review_r1_browser.py"
+    ],
+    "cwd": "/workspace/memory-plugin",
+    "exit_code": 0,
+    "output": "test_review_r1_browser.log.gz",
+    "environment_overrides": {
+      "NODE_PATH": "/tmp/xingshu-domqa/node_modules",
+      "XINGSHU_QA_OUTPUT": "/workspace/r1-followup-evidence/browser-images"
+    },
+    "raw_bytes": 300,
+    "raw_sha256": "3c7e8c263394c88746e27bcaa2d1b9b0bea239f76eaf684c67aa008b1412a3a0"
+  }
+]
