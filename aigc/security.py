@@ -133,11 +133,12 @@ class PrivateStartupFiles:
             return
         try:
             info = self.path.lstat()
-            if not stat.S_ISDIR(info.st_mode) or info.st_ino != self.identity:
+            if not stat.S_ISDIR(info.st_mode) or info.st_ino != self.identity or info.st_uid != os.getuid():
                 return  # Do not follow replacement paths or remove someone else's files.
             for path, inode in self.files.items():
                 try:
-                    if path.lstat().st_ino == inode:
+                    info = path.lstat()
+                    if info.st_ino == inode and stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid():
                         path.unlink()
                 except FileNotFoundError:
                     pass

@@ -5,11 +5,18 @@ import tempfile
 from pathlib import Path
 
 
+WORKSPACE = Path('/workspace')
+
+
 def secure_temporary_directory():
     root = Path(__file__).resolve().parents[1]
     candidates = [Path(os.environ['XINGSHU_TEST_SECURE_ROOT'])] if os.environ.get('XINGSHU_TEST_SECURE_ROOT') else []
-    candidates += [Path('/workspace'), root, root.parent]
+    candidates += [WORKSPACE, root, root.parent]
     errors = []
+    try:
+        candidates.append(Path.home())
+    except (RuntimeError, OSError) as exc:
+        errors.append(str(exc))  # HOME is optional; existing safe candidates still work.
     for base in candidates:
         try:
             base = base.resolve(strict=True)

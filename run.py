@@ -104,7 +104,7 @@ def serve(args, local_only, directory):
     url = "http://%s:%d" % (shown_host if ":" not in shown_host else "[%s]" % shown_host, port)
     url += "/#token=" + app.access_token
     timer = None
-    previous_term = None
+    previous_signals = {}
     try:
         with ExitStack() as stack:
             startup = stack.enter_context(PrivateStartupFiles(store.root, url)) if os.name == 'posix' else None
@@ -125,7 +125,13 @@ def serve(args, local_only, directory):
             elif not startup:
                 print("此平台请手动打开终端链接；未验证 ACL，不自动创建含令牌文件。", flush=True)
             if threading.current_thread() is threading.main_thread():
-                previous_term = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+                shutdown_signals = [signal.SIGTERM]
+                if os.name == 'posix' and hasattr(signal, 'SIGHUP'):
+                    shutdown_signals.append(signal.SIGHUP)
+                def request_shutdown(*_):
+                    raise KeyboardInterrupt()
+                for signum in shutdown_signals:
+                    previous_signals[signum] = signal.signal(signum, request_shutdown)
             try:
                 server.serve_forever(poll_interval=0.5)
             except KeyboardInterrupt:
@@ -135,8 +141,8 @@ def serve(args, local_only, directory):
                     timer.cancel()
                     timer.join(timeout=2)
     finally:
-        if previous_term is not None:
-            signal.signal(signal.SIGTERM, previous_term)
+        for signum, previous in previous_signals.items():
+            signal.signal(signum, previous)
         engine.shutdown()
         server.server_close()
 
